@@ -61,7 +61,7 @@ function Get-InternalVolumes {
 }
 
 function Get-ExternalVolumes {
-    Get-Disk | Where-Object { $_.BusType -eq 'USB' } | Get-Partition | Get-Volume | Where { $_.DriveLetter }
+    Get-Disk | Where-Object { $_.BusType -eq 'USB' } | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter }
 }
 
 function Get-TPMexists {
@@ -160,14 +160,14 @@ function Get-AllUnencryptedVolumes {
 function Get-UnencryptedInternalVolumes {
     Get-InternalVolumes | ForEach {
         $volume = $_.DriveLetter
-        Get-BitLockerVolume -MountPoint $volume
+        Get-BitLockerVolume -MountPoint $volume | Where-Object { $_.VolumeStatus -ne 'FullyEncrypted' }
     }
 }
 
 function Get-UnencryptedExternalVolumes {
     Get-ExternalVolumes | ForEach {
         $volume = $_.DriveLetter
-        Get-BitlockerVolume -MountPoint $volume
+        Get-BitlockerVolume -MountPoint $volume | Where-Object { $_.VolumeStatus -ne 'FullyEncrypted' }
     }
 }
 
