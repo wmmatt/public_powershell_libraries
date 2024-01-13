@@ -56,10 +56,6 @@ function Confirm-EncryptionReadiness {
     }
 }
 
-function Set-EncryptionReadiness {
-
-}
-
 function Get-InternalVolumes {
     Get-Disk | Where-Object { $_.BusType -ne 'USB' } | Get-Partition | Get-Volume | Where-Object { $_.DriveType -like 'fixed' -and $_.DriveLetter }
 }
