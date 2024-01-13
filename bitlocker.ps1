@@ -158,18 +158,25 @@ function Get-AllUnencryptedVolumes {
 }
 
 function Get-UnencryptedInternalVolumes {
-    Get-InternalVolumes | Get-BitLockerVolume
+    Get-InternalVolumes | ForEach {
+        $volume = $_.DriveLetter
+        Get-BitLockerVolume -MountPoint $volume
+    }
 }
 
 function Get-UnencryptedExternalVolumes {
-    Get-ExternalVolumes | Get-UnencryptedVolumes
+    Get-ExternalVolumes | ForEach {
+        $volume = $_.DriveLetter
+        Get-BitlockerVolume -MountPoint $volume
+    }
 }
 
 function Enable-InternalFullDiskEncryption {
     Get-InternalVolumes | ForEach {
         $volume = $_.DriveLetter
         Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest
-        $sysDrive = $env:SystemDrive
+        # Removing ':' so values match
+        $sysDrive = $env:SystemDrive -replace ':',''
         if ($volume -ne $sysDrive) {
             Enable-BitLockerAutoUnlock -Mountpoint $volume
         }
@@ -180,7 +187,8 @@ function Enable-InternalUsedSpaceEncryption {
    Get-InternalVolumes | ForEach {
         $volume = $_.DriveLetter
         Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -UsedSpaceOnly
-        $sysDrive = $env:SystemDrive
+        # Removing ':' so values match
+        $sysDrive = $env:SystemDrive -replace ':',''
         if ($volume -ne $sysDrive) {
             Enable-BitLockerAutoUnlock -Mountpoint $volume
         }
