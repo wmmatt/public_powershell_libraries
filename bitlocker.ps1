@@ -212,6 +212,11 @@ function Enable-ExternalUsedSpaceEncryption {
 }
 
 function Get-IsOSEligible {
+    <#
+        .DESCRIPTION
+        Determines if the OS supports Bitlocker. Remember, Windows 11 now supports a feature called "device encryption".
+        This is not the same thing as Bitlocker, so therefore is not included in the supported conditions.
+    #>
     $osInfo = Get-WmiObject win32_operatingsystem
     $osName = $osInfo.Caption
     $osArch = $osInfo.OSArchitecture
@@ -220,5 +225,54 @@ function Get-IsOSEligible {
         return $true
     } else {
         return $false
+    }
+}
+
+function Get-BitlockerData {
+    $blData = Get-BitLockerVolume | Select-Object *
+    $volumes = Get-InternalVolumes
+    ForEach ($vol in $volumes) {
+        # Volume letters can change, so grabbing the volume ID you can ref for what keys belong to what
+        $volumeID = [regex]::match($vol.UniqueId,'{([^/)]+)}').groups[1].value
+        $bitVol = $blData | Where-Object {$_.MountPoint -like ($vol.driveletter + '*')}
+        $key = ($bitVol.KeyProtector | Select-Object -ExpandProperty RecoveryPassword)
+        If (!$key) {
+            $key = 'None'
+        }
+        $newObject = New-Object PSObject
+        $newObject | Add-Member -Type NoteProperty -Name 'VolumeID' -Value $volumeID
+        $newObject | Add-Member -Type NoteProperty -Name 'MountPoint' -Value $BitVol.MountPoint
+        $newObject | Add-Member -Type NoteProperty -Name 'RecoveryPassword' -Value $key
+        $newObject | Add-Member -Type NoteProperty -Name 'VolumeType' -Value $BitVol.VolumeType
+        $newObject | Add-Member -Type NoteProperty -Name 'Encryptionmethod' -Value $BitVol.EncryptionMethod
+        $newObject | Add-Member -Type NoteProperty -Name 'VolumeStatus' -Value $BitVol.VolumeStatus
+        $newObject | Add-Member -Type NoteProperty -Name 'ProtectionStatus' -Value $BitVol.ProtectionStatus
+        $newObject | Add-Member -Type NoteProperty -Name 'LockStatus' -Value $BitVol.LockStatus
+        $newObject | Add-Member -Type NoteProperty -Name 'EncryptionPercentage' -Value $BitVol.EncryptionPercentage
+        $newObject | Add-Member -Type NoteProperty -Name 'DriveType' -Value 'Internal'
+        $newObject
+    }
+
+    $volumes = Get-ExternalVolumes
+    ForEach ($vol in $volumes) {
+        # Volume letters can change, so grabbing the volume ID you can ref for what keys belong to what
+        $volumeID = [regex]::match($vol.UniqueId,'{([^/)]+)}').groups[1].value
+        $bitVol = $blData | Where-Object {$_.MountPoint -like ($vol.driveletter + '*')}
+        $key = ($bitVol.KeyProtector | Select-Object -ExpandProperty RecoveryPassword)
+        If (!$key) {
+            $key = 'None'
+        }
+        $newObject = New-Object PSObject
+        $newObject | Add-Member -Type NoteProperty -Name 'VolumeID' -Value $volumeID
+        $newObject | Add-Member -Type NoteProperty -Name 'MountPoint' -Value $BitVol.MountPoint
+        $newObject | Add-Member -Type NoteProperty -Name 'RecoveryPassword' -Value $key
+        $newObject | Add-Member -Type NoteProperty -Name 'VolumeType' -Value $BitVol.VolumeType
+        $newObject | Add-Member -Type NoteProperty -Name 'Encryptionmethod' -Value $BitVol.EncryptionMethod
+        $newObject | Add-Member -Type NoteProperty -Name 'VolumeStatus' -Value $BitVol.VolumeStatus
+        $newObject | Add-Member -Type NoteProperty -Name 'ProtectionStatus' -Value $BitVol.ProtectionStatus
+        $newObject | Add-Member -Type NoteProperty -Name 'LockStatus' -Value $BitVol.LockStatus
+        $newObject | Add-Member -Type NoteProperty -Name 'EncryptionPercentage' -Value $BitVol.EncryptionPercentage
+        $newObject | Add-Member -Type NoteProperty -Name 'DriveType' -Value 'External'
+        $newObject
     }
 }
