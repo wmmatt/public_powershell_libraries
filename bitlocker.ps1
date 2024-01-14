@@ -235,7 +235,7 @@ function Get-BitlockerData {
         # Volume letters can change, so grabbing the volume ID you can ref for what keys belong to what
         $volumeID = [regex]::match($vol.UniqueId,'{([^/)]+)}').groups[1].value
         $bitVol = $blData | Where-Object {$_.MountPoint -like ($vol.driveletter + '*')}
-        $key = ($bitVol.KeyProtector | Select-Object -ExpandProperty RecoveryPassword)
+        $key = ($bitVol.KeyProtector).RecoveryPassword
         If (!$key) {
             $key = 'None'
         }
@@ -258,7 +258,7 @@ function Get-BitlockerData {
         # Volume letters can change, so grabbing the volume ID you can ref for what keys belong to what
         $volumeID = [regex]::match($vol.UniqueId,'{([^/)]+)}').groups[1].value
         $bitVol = $blData | Where-Object {$_.MountPoint -like ($vol.driveletter + '*')}
-        $key = ($bitVol.KeyProtector | Select-Object -ExpandProperty RecoveryPassword)
+        $key = ($bitVol.KeyProtector).RecoveryPassword
         If (!$key) {
             $key = 'None'
         }
