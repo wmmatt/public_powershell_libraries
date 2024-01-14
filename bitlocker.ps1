@@ -276,3 +276,47 @@ function Get-BitlockerData {
         $newObject
     }
 }
+
+function Set-UnpauseEncryptedVolumes {
+    $pausedVolumes = (Get-BitlockerVolume | Where { $_.VolumeStatus -eq 'FullyEncrypted' -and $_.ProtectionStatus -eq 'Off' })
+    try {
+        if ($pausedVolumes) {
+            $pausedVolumes | Resume-Bitlocker -ErrorAction Stop
+            return $true
+        } else {
+            throw 'No encrypted volumes to resume'
+        }
+    } catch {
+        return $error
+    }
+}
+
+function Get-EncryptionBestPracticeStatus {
+    [CmdletBinding()]
+
+    Param(
+        [Parameter(
+            HelpMessage='Set the expected encryption method'
+        )]
+        [ValidateSet('Aes128', 'Aes256', 'XtsAes128', 'XtsAes256')]
+        [string]$ExpectedEncryptionMethod = 'Aes256',
+
+        [Parameter(
+            HelpMessage='Set the types of volumes that should be encrypted'
+        )]
+        [ValidateSet('Internal', 'External', 'InternalAndExternal')]
+        [string]$TargetVolumes = 'Internal'
+    )
+
+    Get-BitlockerData | ForEach {
+        if ($_.ProtectionStatus -ne 'FullyEncrypted') {
+            throw "Protection status is not 'FullyEncrypted'. $_"
+        }
+
+        if ($_.EncryptionMethod -ne $ExpectedEncryptionMethod) {
+            throw "Encryption method does not match the expected $ExpectedEncryptionMethod. $_"
+        }
+
+
+    }
+}
