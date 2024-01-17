@@ -4,6 +4,8 @@ function Confirm-EncryptionReadiness {
     )
     if (!(Get-TPMexists)) {
         throw 'TPM does not exist'
+    } else {
+        Write-Output 'Confirmed TPM exists'
     }
 
     if (!(Get-IsTPMEnabled)) {
@@ -11,14 +13,19 @@ function Confirm-EncryptionReadiness {
             if ($Remediate) {
                 Set-TPMEnabled
                 if (!(Get-IsTPMEnabled)) {
-                    throw
+                    throw 'Failed to enable the TPM'
+                } else {
+                    return 'Successfully enabled the TPM!'
                 }
             } else {
-                throw
+                # Remdiation wasn't enabled, throw to the catch
+                throw 'Remediation was not enabled to resolve: TPM is not enabled'
             }
         } catch {
-            return 'TPM is not enabled'
+            return $Error
         }
+    } else {
+        Write-Output 'Confirmed TPM is enabled'
     }
 
     if (!(Get-IsTPMActivated)) {
@@ -26,14 +33,19 @@ function Confirm-EncryptionReadiness {
             if ($Remediate) {
                 Set-TPMActive
                 if (!(Get-IsTPMActivated)) {
-                    throw
+                    throw 'Failed to activate the TPM'
+                } else {
+                    return 'Successfully activated the TPM!'
                 }
             } else {
-                throw
+                # Remdiation wasn't enabled, throw to the catch
+                throw 'Remediation was not enabled to resolve: TPM is not activated'
             }
         } catch {
-            return 'TPM is not activated'
+            return $Error
         }
+    } else {
+        Write-Output 'Confirmed TPM is activated'
     }
 
     if (!(Get-IsTPMOwned))  {
@@ -41,18 +53,25 @@ function Confirm-EncryptionReadiness {
             if ($Remediate) {
                 Set-TPMOwnership
                 if (!(Get-IsTPMOwned)) {
-                    throw
+                    throw 'Failed to set the owner on the TPM'
+                } else {
+                    return 'Successfully set an owner on the TPM!'
                 }
             } else {
-                throw
+                # Remdiation wasn't enabled, throw to the catch
+                throw 'Remediation was not enabled to resolve: TPM has no owner'
             }
         } catch {
-            return 'TPM is not owned'
+            return $Error
         }
+    } else {
+        Write-Output 'Confirmed TPM is owned'
     }
 
     if (!(Get-IsOSEligible)) {
         throw 'OS is not eligible'
+    } else {
+        Write-Output 'Confirmed OS is eligible'
     }
 }
 
@@ -381,20 +400,26 @@ function Set-EnforceBestPracticeEncryption {
             Write-Output "Best practice misalignment: Volume letter [$($_.MountPoint)] is not encrypted"
             Enable-SelectVolumeFullDiskEncryption -MountPoint $_.MountPoint
             return "Initiated encryption on volume letter [$($_.MountPoint)]"
-        }
+        } 
 
         if ($_.VolumeStatus -eq 'EncryptionPaused' -or $_.VolumeStatus -eq 'PartiallyEncrypted') {
             Write-Output "Best practice misalignment: Volume letter [$($_.MountPoint)] had encryption paused"
             Resume-BitLocker -MountPoint $_.MountPoint -ErrorAction Stop
-            return "Resumed protection on volume letter [$($_.VolumeStatus)"
+            return "Resumed protection on volume letter [$($_.VolumeStatus)]"
         }
 
         if ($_.VolumeStatus -eq 'DecryptionPaused' -or $_.VolumeStatus -eq 'PartiallyDecrypted') {
+            Write-Output "Best practice misalignment: Volume letter [$($_.MountPoint)] had decryption paused"
             Disable-BitLocker -MountPoint $_.MountPoint -ErrorAction Stop
+            return "Resumed decryption on volume letter [$($_.VolumeStatus)]"
         }
 
         if ($_.EncryptionMethod -ne $ExpectedEncryptionMethod) {
+            Write-Output "Best practice misalignment: Volume letter [$($_.MountPoint)] has encryption method of [$($_.EncryptionMethod)] when the expected method is $ExpectedEncryptionMethod" 
             Disable-Bitlocker -MountPoint $_.MountPoint -ErrorAction Stop
+            return "Initiated decryption of volume letter [$($_.VolumeStatus)]"
         }
+
+        return "Confirmed volume [$($_.VolumeStatus) is in best practice alignment!"
     }
 }
