@@ -420,6 +420,8 @@ function Set-EnforceBestPracticeEncryption {
             return "Initiated decryption of volume letter [$($_.VolumeStatus)]"
         }
 
+        Get-BitlockerData
+
         return "Confirmed volume [$($_.VolumeStatus) is in best practice alignment!"
     }
 }
