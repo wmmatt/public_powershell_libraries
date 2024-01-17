@@ -174,7 +174,7 @@ function Get-UnencryptedExternalVolumes {
 function Enable-InternalFullDiskEncryption {
     Get-InternalVolumes | ForEach {
         $volume = $_.DriveLetter
-        Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest
+        Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -ErrorAction Stop
         # Removing ':' so values match
         $sysDrive = $env:SystemDrive -replace ':',''
         if ($volume -ne $sysDrive) {
@@ -186,7 +186,7 @@ function Enable-InternalFullDiskEncryption {
 function Enable-InternalUsedSpaceEncryption {
    Get-InternalVolumes | ForEach {
         $volume = $_.DriveLetter
-        Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -UsedSpaceOnly
+        Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -UsedSpaceOnly -ErrorAction Stop
         # Removing ':' so values match
         $sysDrive = $env:SystemDrive -replace ':',''
         if ($volume -ne $sysDrive) {
@@ -198,7 +198,7 @@ function Enable-InternalUsedSpaceEncryption {
 function Enable-ExternalFullDiskEncryption {
     Get-ExternalVolumes | ForEach {
         $volume = $_.DriveLetter
-        Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest
+        Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -ErrorAction Stop
         Enable-BitLockerAutoUnlock -Mountpoint $volume
     }
 }
@@ -206,9 +206,25 @@ function Enable-ExternalFullDiskEncryption {
 function Enable-ExternalUsedSpaceEncryption {
     Get-ExternalVolumes | ForEach {
         $volume = $_.DriveLetter
-        Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -UsedSpaceOnly
+        Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -UsedSpaceOnly -ErrorAction Stop
         Enable-BitLockerAutoUnlock -Mountpoint $volume
     }
+}
+
+function Enable-SelectVolumeFullDiskEncryption {
+    param (
+        [string]$MountPoint
+    )
+
+    Enable-Bitlocker -MountPoint $MountPoint -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -ErrorAction Stop
+}
+
+function Enable-SelectVolumeUsedSpaceEncryption {
+    param (
+        [string]$MountPoint
+    )
+
+    Enable-Bitlocker -MountPoint $MountPoint -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -UsedSpaceOnly -ErrorAction Stop
 }
 
 function Get-IsOSEligible {
@@ -235,7 +251,7 @@ function Get-BitlockerData {
         # Volume letters can change, so grabbing the volume ID you can ref for what keys belong to what
         $volumeID = [regex]::match($vol.UniqueId,'{([^/)]+)}').groups[1].value
         $bitVol = $blData | Where-Object {$_.MountPoint -like ($vol.driveletter + '*')}
-        $key = ($bitVol.KeyProtector).RecoveryPassword
+        $key = $bitVol.KeyProtector | Select-Object -ExpandProperty RecoveryPassword
         If (!$key) {
             $key = 'None'
         }
@@ -244,7 +260,7 @@ function Get-BitlockerData {
         $newObject | Add-Member -Type NoteProperty -Name 'MountPoint' -Value $BitVol.MountPoint
         $newObject | Add-Member -Type NoteProperty -Name 'RecoveryPassword' -Value $key
         $newObject | Add-Member -Type NoteProperty -Name 'VolumeType' -Value $BitVol.VolumeType
-        $newObject | Add-Member -Type NoteProperty -Name 'Encryptionmethod' -Value $BitVol.EncryptionMethod
+        $newObject | Add-Member -Type NoteProperty -Name 'EncryptionMethod' -Value $BitVol.EncryptionMethod
         $newObject | Add-Member -Type NoteProperty -Name 'VolumeStatus' -Value $BitVol.VolumeStatus
         $newObject | Add-Member -Type NoteProperty -Name 'ProtectionStatus' -Value $BitVol.ProtectionStatus
         $newObject | Add-Member -Type NoteProperty -Name 'LockStatus' -Value $BitVol.LockStatus
@@ -258,7 +274,7 @@ function Get-BitlockerData {
         # Volume letters can change, so grabbing the volume ID you can ref for what keys belong to what
         $volumeID = [regex]::match($vol.UniqueId,'{([^/)]+)}').groups[1].value
         $bitVol = $blData | Where-Object {$_.MountPoint -like ($vol.driveletter + '*')}
-        $key = ($bitVol.KeyProtector).RecoveryPassword
+        $key = $bitVol.KeyProtector | Select-Object -ExpandProperty RecoveryPassword
         If (!$key) {
             $key = 'None'
         }
@@ -267,12 +283,118 @@ function Get-BitlockerData {
         $newObject | Add-Member -Type NoteProperty -Name 'MountPoint' -Value $BitVol.MountPoint
         $newObject | Add-Member -Type NoteProperty -Name 'RecoveryPassword' -Value $key
         $newObject | Add-Member -Type NoteProperty -Name 'VolumeType' -Value $BitVol.VolumeType
-        $newObject | Add-Member -Type NoteProperty -Name 'Encryptionmethod' -Value $BitVol.EncryptionMethod
+        $newObject | Add-Member -Type NoteProperty -Name 'EncryptionMethod' -Value $BitVol.EncryptionMethod
         $newObject | Add-Member -Type NoteProperty -Name 'VolumeStatus' -Value $BitVol.VolumeStatus
         $newObject | Add-Member -Type NoteProperty -Name 'ProtectionStatus' -Value $BitVol.ProtectionStatus
         $newObject | Add-Member -Type NoteProperty -Name 'LockStatus' -Value $BitVol.LockStatus
         $newObject | Add-Member -Type NoteProperty -Name 'EncryptionPercentage' -Value $BitVol.EncryptionPercentage
         $newObject | Add-Member -Type NoteProperty -Name 'DriveType' -Value 'External'
         $newObject
+    }
+}
+
+function Confirm-EncryptionBestPracticeState {
+    <#
+        .DESCRIPTION
+        Confirm the following condtions are met:
+            - OS is supported
+            - TPM is present
+            - TPM is enabled
+            - TPM is activated
+            - TPM is owned
+            - All volumes you specify are encrypted
+            - The Encrypted Method is what you spcify on all volumes
+    #>
+
+    [CmdletBinding()]
+
+    Param(
+        [Parameter(
+            HelpMessage='Set the expected encryption method'
+        )]
+        [ValidateSet('Aes128', 'Aes256', 'XtsAes128', 'XtsAes256')]
+        [string]$ExpectedEncryptionMethod = 'Aes256',
+
+        [Parameter(
+            HelpMessage='Set the types of volumes that should be encrypted'
+        )]
+        [ValidateSet('InternalOnly', 'InternalAndExternal')]
+        [string]$WhatShouldBeEncrypted = 'InternalOnly'
+    )
+
+
+    switch ($WhatShouldBeEncrypted) {
+        'InternalOnly'          { $volumeType = 'Internal' }
+        'InternalAndExternal'   { $volumeType =  'Internal', 'External'}
+    }
+
+    try {
+        Confirm-EncryptionReadiness
+
+        switch ($WhatShouldBeEncrypted) {
+            'InternalOnly'          { $volumes = Get-UnencryptedInternalVolumes }
+            'InternalAndExternal'   { $volumes = Get-AllUnencryptedVolumes }
+        }
+
+        if ($volumes) {
+            throw "Found unencrypted volumes: $volumes"
+        }
+
+        $volumes | ForEach {
+            if ($_.EncryptionMethod -ne $ExpectedEncryptionMethod) {
+                throw "Expected [$ExpectedEncryptionMethod], found [$($_.EncryptionMethod)]"
+            }
+        }
+
+        # This means we didn't throw, so good to go
+        return $true
+    } catch {
+        # We have exactly what is wrong sitting in $_ here, but I like having a truthy/falsy out for pass/fail
+        return $false
+    }
+}
+
+function Set-EnforceBestPracticeEncryption {
+    Param(
+        [Parameter(
+            HelpMessage='Set the expected encryption method'
+        )]
+        [ValidateSet('Aes128', 'Aes256', 'XtsAes128', 'XtsAes256')]
+        [string]$ExpectedEncryptionMethod = 'Aes256',
+
+        [Parameter(
+            HelpMessage='Set the types of volumes that should be encrypted'
+        )]
+        [ValidateSet('InternalOnly', 'InternalAndExternal')]
+        [string]$WhatShouldBeEncrypted = 'InternalOnly'
+    )
+
+    Confirm-EncryptionReadiness -Remediate $true
+
+    switch ($WhatShouldBeEncrypted) {
+        'InternalOnly'          { $volumes = Get-InternalVolumes | Get-BitlockerData }
+        'InternalAndExternal'   { $volumes = Get-BitlockerData }
+    }
+
+    $volumes | ForEach {
+        if ($_.VolumeStatus -eq 'FullyDecrypted') {
+            Write-Output "Best practice misalignment: Volume letter [$($_.MountPoint)] is not encrypted"
+            Enable-SelectVolumeFullDiskEncryption -MountPoint $_.MountPoint
+            return "Initiated encryption on volume letter [$($_.MountPoint)]"
+        }
+
+        if ($_.VolumeStatus -eq 'EncryptionPaused' -or $_.VolumeStatus -eq 'PartiallyEncrypted') {
+            Write-Output "Best practice misalignment: Volume letter [$($_.MountPoint)] had encryption paused"
+            Resume-BitLocker -MountPoint $_.MountPoint -ErrorAction Stop
+            return "Resumed protection on volume letter [$($_.VolumeStatus)"
+        }
+
+        if ($_.VolumeStatus -eq 'DecryptionPaused' -or $_.VolumeStatus -eq 'PartiallyDecrypted') {
+            Disable-BitLocker -MountPoint $_.MountPoint -ErrorAction Stop
+        }
+
+        if ($_.EncryptionMethod -ne $ExpectedEncryptionMethod) {
+            Disable-Bitlocker -MountPoint $_.MountPoint -ErrorAction Stop
+        }
     }
 }
