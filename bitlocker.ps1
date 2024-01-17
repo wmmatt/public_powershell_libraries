@@ -422,6 +422,6 @@ function Set-EnforceBestPracticeEncryption {
 
         Get-BitlockerData
 
-        return "Confirmed volume [$($_.VolumeStatus) is in best practice alignment!"
+        return "Confirmed volume [$($_.MountPoint)] is in best practice alignment!"
     }
 }
