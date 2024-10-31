@@ -20,6 +20,7 @@ function Set-Nuget {
 
 
 function Set-NugetDesiredState {
+    # Install Nuget if it's missing
     $nuget = Test-Nuget
     if (!$nuget) {
         Set-Nuget
@@ -49,6 +50,7 @@ function Set-PSWindowsUpdate {
 
 
 function Set-PSWindowsUpdateDesiredState {
+    # Install PSWindowsUpdate module if it's missing
     $nuget = Test-PSWindowsUpdate
     if (!$nuget) {
         Set-PSWindowsUpdate
@@ -57,10 +59,12 @@ function Set-PSWindowsUpdateDesiredState {
 
 
 function Get-WindowsUpdateStats {
+    # Collect patch information
     Set-ExecutionPolicy Bypass
     Set-NugetDesiredState
     Set-PSWindowsUpdateDesiredState
     Import-Module pswindowsupdate -ErrorAction Stop
+    # Limit to patches that have a KB to ensure we're looking for real security/OS types of patches
     $installedUpdates = Get-WUHistory | Where-Object { $_.KB -ne '' -and $_.Result -eq 'Succeeded'}
     $lastInstalledUpdate = $installedUpdates | Sort-Object -Property Date | Select-Object -Last 1
     $lastPatchedDate = $lastInstalledUpdate.Date
