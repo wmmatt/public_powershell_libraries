@@ -25,6 +25,8 @@ function Set-NugetDesiredState {
     if (!$nuget) {
         Set-Nuget
     }
+
+    Test-Nuget
 }
 
 
@@ -55,6 +57,8 @@ function Set-PSWindowsUpdateDesiredState {
     if (!$nuget) {
         Set-PSWindowsUpdate
     }
+
+    Test-PSWindowsUpdate
 }
 
 
