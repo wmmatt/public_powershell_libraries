@@ -78,7 +78,7 @@ function Get-WindowsUpdateStats {
 
     # Return an object with the results
     return @{
-        LastPatchDate = $lastInstalledUpdate.date
+        LastPatchDate = $lastPatchedDateFormatted
         PatchName     = $lastInstalledUpdate.Title
     }
 }
