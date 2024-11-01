@@ -112,7 +112,7 @@ function Test-SystemUptime {
     $acceptableDate = $currentDate.AddDays(-$acceptableDays)
     $lastRebootDate = (Get-SystemUptime).LastBootTime
 
-     # Determine if the last reboot was installed within the acceptable timeframe
+    # Determine if the last reboot was installed within the acceptable timeframe
     $isCompliant = $lastRebootDate -ge $acceptableDate
 
     return $isCompliant
