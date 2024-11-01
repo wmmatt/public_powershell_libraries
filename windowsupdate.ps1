@@ -96,4 +96,3 @@ function Test-WindowsUpdateStats {
 
     return $isCompliant
 }
- 
