@@ -77,7 +77,7 @@ function Get-WindowsUpdateStats {
 }
 
 
-function Test-WindowsUpdateStats {
+function Test-WindowsUpdate {
     # Define the maximum number of days an endpoint can go without patching
     $acceptableDays = 45
     $currentDate = Get-Date
@@ -88,4 +88,32 @@ function Test-WindowsUpdateStats {
     $isCompliant = $lastPatchedDate -ge $acceptableDate
 
     return $isCompliant
+} 
+
+
+function Set-WindowsUpdate {
+    # Retrieve the list of updates (excluding drivers) that need installation
+    $updates = Get-WindowsUpdate
+    if ($updates) {
+        # Install updates, suppressing reboot
+        Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -AutoReboot:$false -ErrorAction Stop
+    }
+}
+
+
+function Set-WindowsUpdateDesiredState {
+    # Check for missing updates
+    $hasUpdates = Test-WindowsUpdate
+    if ($hasUpdates) {
+        # Install all pending updates, excluding drivers, without reboot
+        $installOutput = Set-WindowsUpdate
+    }
+    # Return the compliance state after attempting the update
+    $isCompiant = Test-WindowsUpdate
+    
+    # Return an object with the results
+    return @{
+        InstallOutput = $installOutput
+        IsCompliant   = $isCompiant
+    }
 } 
