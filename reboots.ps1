@@ -117,3 +117,12 @@ function Test-SystemUptime {
 
     return $isCompliant
 }
+
+
+function Set-UptimeDesiredState {
+    $isCompliant = Test-SystemUptime
+    if (!$isCompliant) {
+        # CMD command to display a message and initiate a reboot in 1 minute
+        shutdown /r /f /t 60 /c "This system is rebooting in 1 minute to install critical patches. Please save your work to avoid data loss!"
+    }
+}

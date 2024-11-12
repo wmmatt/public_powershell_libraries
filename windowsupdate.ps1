@@ -5,12 +5,7 @@ function Get-Nuget {
 
 
 function Test-Nuget {
-    $nuget = Get-Nuget
-    if (!$nuget) {
-        return $false
-    } else {
-        return $true
-    }
+    return [bool](Get-Nuget)
 }
 
 
@@ -31,18 +26,13 @@ function Set-NugetDesiredState {
 
 
 function Get-PSWindowsUpdate {
-    $pswindowsupdate = Get-Module -Name pswindowsupdate -ErrorAction SilentlyContinue
+    $pswindowsupdate = Get-Module -Name PSWindowsUpdate -ListAvailable -ErrorAction SilentlyContinue
     return $pswindowsupdate
 }
 
 
 function Test-PSWindowsUpdate {
-    $psWindowsUpdate = Get-PSWindowsUpdate
-    if (!$psWindowsUpdate) {
-        return $false
-    } else {
-        return $true
-    }
+    return [bool](Get-PSWindowsUpdate)
 }
 
 
@@ -52,24 +42,27 @@ function Set-PSWindowsUpdate {
 
 
 function Set-PSWindowsUpdateDesiredState {
-    # Install PSWindowsUpdate module if it's missing
-    $nuget = Test-PSWindowsUpdate
-    if (!$nuget) {
+    # Check if PSWindowsUpdate module is installed
+    $pswindowsupdate = Test-PSWindowsUpdate
+    if (!$pswindowsupdate) {
         Set-PSWindowsUpdate
     }
-
+    # Import the module to the current session
+    Import-Module -Name PSWindowsUpdate -ErrorAction Stop
     Test-PSWindowsUpdate
 }
 
 
 function Get-WindowsUpdateStats {
     # Collect patch information
-    Set-ExecutionPolicy Bypass
-    Set-NugetDesiredState
-    Set-PSWindowsUpdateDesiredState
-    Import-Module pswindowsupdate -ErrorAction Stop
+    Set-ExecutionPolicy Bypass -Confirm:$false
+    # May output this later, but for now just stuffing in a variable
+    $output = Set-NugetDesiredState
+    $output = Set-PSWindowsUpdateDesiredState
+    # The module should already be imported in Set-PSWindowsUpdateDesiredState
+    # Proceed to use the module's cmdlets
     # Limit to patches that have a KB to ensure we're looking for real security/OS types of patches
-    $installedUpdates = Get-WUHistory | Where-Object { $_.KB -ne '' -and $_.Result -eq 'Succeeded'}
+    $installedUpdates = Get-WUHistory | Where-Object { $_.KB -ne '' -and $_.Result -eq 'Succeeded' }
     $lastInstalledUpdate = $installedUpdates | Sort-Object -Property Date | Select-Object -Last 1
     $lastPatchedDate = $lastInstalledUpdate.Date
 
@@ -95,4 +88,4 @@ function Test-WindowsUpdateStats {
     $isCompliant = $lastPatchedDate -ge $acceptableDate
 
     return $isCompliant
-}
+} 
