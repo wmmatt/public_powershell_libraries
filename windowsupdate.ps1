@@ -234,7 +234,7 @@ function Test-WindowsUpdateState {
     $lastPatchedDate = (Get-WindowsUpdateStats).LastPatchDate
 
     # Determine if the last patch was installed within the acceptable timeframe
-    $isCompliant = $lastPatchedDate -ge $acceptableDate
+    $isCompliant = [datetime]$lastPatchedDate -ge $acceptableDate
 
     return $isCompliant
 } 
