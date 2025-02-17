@@ -1,3 +1,8 @@
+<#
+    .NOTES
+    - If Enable-InternalFullDiskEncryption is enabled and you want to decrypt, all non $env:SystemDrive volumes must be decrypted before you can decrypt the $env:SystemDrive itself
+#>
+
 function Confirm-EncryptionReadiness {
     param (
         [boolean]$Remediate     # Set $true to auto resolve
@@ -194,8 +199,8 @@ function Enable-InternalFullDiskEncryption {
     Get-InternalVolumes | ForEach {
         $volume = $_.DriveLetter
         Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -ErrorAction Stop
-        # Removing ':' so values match
-        $sysDrive = $env:SystemDrive -replace ':',''
+        # We don't want to run the Enable-BitlockerAutoUnlock on the systemdrive (usually C)
+        $sysDrive = $env:SystemDrive
         if ($volume -ne $sysDrive) {
             Enable-BitLockerAutoUnlock -Mountpoint $volume
         }
@@ -206,8 +211,8 @@ function Enable-InternalUsedSpaceEncryption {
    Get-InternalVolumes | ForEach {
         $volume = $_.DriveLetter
         Enable-Bitlocker -MountPoint $volume -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -UsedSpaceOnly -ErrorAction Stop
-        # Removing ':' so values match
-        $sysDrive = $env:SystemDrive -replace ':',''
+        # We don't want to run the Enable-BitlockerAutoUnlock on the systemdrive (usually C)
+        $sysDrive = $env:SystemDrive
         if ($volume -ne $sysDrive) {
             Enable-BitLockerAutoUnlock -Mountpoint $volume
         }
@@ -236,6 +241,11 @@ function Enable-SelectVolumeFullDiskEncryption {
     )
 
     Enable-Bitlocker -MountPoint $MountPoint -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -ErrorAction Stop
+    # We don't want to run the Enable-BitlockerAutoUnlock on the systemdrive (usually C)
+    $sysDrive = $env:SystemDrive
+    if ($MountPoint -ne $sysDrive) {
+        Enable-BitLockerAutoUnlock -Mountpoint $MountPoint
+    }
 }
 
 function Enable-SelectVolumeUsedSpaceEncryption {
@@ -244,6 +254,11 @@ function Enable-SelectVolumeUsedSpaceEncryption {
     )
 
     Enable-Bitlocker -MountPoint $MountPoint -EncryptionMethod Aes256 -RecoveryPasswordProtector -SkipHardwareTest -UsedSpaceOnly -ErrorAction Stop
+    # We don't want to run the Enable-BitlockerAutoUnlock on the systemdrive (usually C)
+    $sysDrive = $env:SystemDrive
+    if ($MountPoint -ne $sysDrive) {
+        Enable-BitLockerAutoUnlock -Mountpoint $MountPoint
+    }
 }
 
 function Get-IsOSEligible {
