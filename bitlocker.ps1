@@ -271,7 +271,7 @@ function Get-IsOSEligible {
     $osName = $osInfo.Caption
     $osArch = $osInfo.OSArchitecture
 
-    if ($osName -like '*Pro*' -or $osName -like '*Enterprise*' -or $osName -like '*Education*') {
+    if ($osName -like '*Pro*' -or $osName -like '*Enterprise*' -or $osName -like '*Education*' -or $osName -like '*Business*') {
         return $true
     } else {
         return $false
