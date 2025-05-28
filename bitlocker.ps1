@@ -81,11 +81,11 @@ function Confirm-EncryptionReadiness {
 }
 
 function Get-InternalVolumes {
-    Get-Disk | Where-Object { $_.BusType -ne 'USB' } | Get-Partition | Get-Volume | Where-Object { $_.DriveType -like 'fixed' -and $_.DriveLetter }
+    Get-Disk | Where-Object { $_.BusType -notin @('USB', '1394', 'MMC', 'UFS') } | Get-Partition | Get-Volume | Where-Object { $_.DriveType -eq 'Fixed' -and $_.DriveLetter }
 }
 
 function Get-ExternalVolumes {
-    Get-Disk | Where-Object { $_.BusType -eq 'USB' } | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter }
+    Get-Disk | Where-Object { $_.BusType -in @('USB', '1394', 'MMC', 'UFS') } | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter }
 }
 
 function Get-TPMexists {
