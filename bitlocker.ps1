@@ -455,6 +455,22 @@ function Save-BitlockerDataToDisk {
     # Load current BitLocker data
     $currentData = Get-BitlockerData
 
+    # Skip if no volumes have a usable recovery key
+    $hasAnyRecoveryKeys = $currentData | Where-Object {
+        $keys = $_.RecoveryPassword
+        if ($keys -is [array]) {
+            $keys = $keys | Where-Object { $_ -and $_ -ne 'None' -and $_ -ne '' }
+        } elseif ($keys -eq 'None' -or $keys -eq '') {
+            $keys = @()
+        }
+        $keys.Count -gt 0
+    }
+
+    if (-not $hasAnyRecoveryKeys) {
+        Write-Output "No recovery keys found. Skipping JSON update to preserve history."
+        return
+    }
+
     # Load existing file if it exists
     if (Test-Path $Path) {
         try {
