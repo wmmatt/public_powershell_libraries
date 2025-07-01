@@ -526,3 +526,31 @@ function Get-BitlockerDataSavedToDisk {
 
     return $result
 }
+
+function Get-BitlockerDataSavedToDiskSummary {
+    $jsonPath = "$env:ProgramData\BitLockerHistory.json"
+
+    if (!(Test-Path $jsonPath)) {
+        Write-Warning "No BitLocker history file found at $jsonPath"
+        return
+    }
+
+    $jsonData = Get-Content $jsonPath -Raw | ConvertFrom-Json
+
+    foreach ($volumeID in $jsonData.PSObject.Properties.Name) {
+        $history = $jsonData.$volumeID
+        if ($history.Count -eq 0) { continue }
+
+        # Grab the latest entry (sorted by date if needed)
+        $latest = $history | Sort-Object Date -Descending | Select-Object -First 1
+
+        # Flatten recovery keys array if it is an array
+        $key = if ($latest.RecoveryPassword -is [array]) {
+            ($latest.RecoveryPassword -ne "") -join ", "
+        } else {
+            $latest.RecoveryPassword
+        }
+
+        "$volumeID, $($latest.MountPoint), $key"
+    }
+}
