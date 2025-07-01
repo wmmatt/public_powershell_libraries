@@ -455,10 +455,10 @@ function Save-BitlockerDataToDisk {
     # Get current BitLocker data from your main function
     $currentData = Get-BitlockerData
 
-    # Load existing file if it exists
+    # Load existing data
     if (Test-Path $Path) {
         try {
-            $existingData = Get-Content $Path -Raw | ConvertFrom-Json
+            $existingData = Get-Content $Path -Raw | ConvertFrom-Json -Depth 5
         } catch {
             Write-Warning "Failed to parse existing JSON file. Starting fresh."
             $existingData = @{}
@@ -467,12 +467,11 @@ function Save-BitlockerDataToDisk {
         $existingData = @{}
     }
 
-    # If file didn't deserialize into a hashtable, initialize it
+    # Convert to hashtable if necessary
     if (-not ($existingData -is [hashtable])) {
         $existingData = @{}
     }
 
-    # Append or update data
     foreach ($vol in $currentData) {
         $volumeID = $vol.VolumeID
 
@@ -480,7 +479,7 @@ function Save-BitlockerDataToDisk {
             $existingData[$volumeID] = @()
         }
 
-        # Check if key already exists in history
+        # Check if this recovery key is already in the history
         $existingKeys = $existingData[$volumeID] | ForEach-Object { $_.RecoveryPassword }
 
         if ($vol.RecoveryPassword -ne 'None' -and -not $existingKeys -contains $vol.RecoveryPassword) {
@@ -500,7 +499,7 @@ function Save-BitlockerDataToDisk {
         }
     }
 
-    # Save updated JSON to disk
+    # Write back full preserved history
     $existingData | ConvertTo-Json -Depth 5 | Set-Content -Path $Path -Encoding UTF8
 }
 
@@ -551,6 +550,6 @@ function Get-BitlockerDataSavedToDiskSummary {
             $latest.RecoveryPassword
         }
 
-        "ID: $volumeID, Letter: $($latest.MountPoint), RecoveryPassword: $key"
+        "Date: $($latest.Date), ID: $volumeID, Letter: $($latest.MountPoint), RecoveryPassword: $key"
     }
 }
