@@ -405,9 +405,15 @@ function Set-EnforceBestPracticeEncryption {
 
     Confirm-EncryptionReadiness -Remediate $true
 
-    switch ($WhatShouldBeEncrypted) {
-        'InternalOnly'          { $volumes = Get-InternalVolumes | Get-BitlockerData }
-        'InternalAndExternal'   { $volumes = Get-BitlockerData }
+    # Previous revisions were piping Get-InternvalVolumes to Get-BitlockerData, but Get-BitlockerData 
+    # doesn't support selecting volumes... so effectively, this was ignoring internal only, and using
+    # full output from Get-BitlockerData-- meaning, externals could be encrypted. This is now fixed!
+    $internalVolumes = (Get-InternalVolumes | Where-Object { $_.DriveLetter }) | ForEach-Object { "$($_.DriveLetter):" }
+    $allBitlockerData = Get-BitlockerData
+
+    $volumes = switch ($WhatShouldBeEncrypted) {
+        'InternalOnly'         { $allBitlockerData | Where-Object { $internalVolumes -contains $_.MountPoint } }
+        'InternalAndExternal'  { $allBitlockerData }
     }
 
     $volumes | ForEach {
