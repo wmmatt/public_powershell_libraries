@@ -458,7 +458,12 @@ function Save-BitlockerDataToDisk {
     # Load existing data
     if (Test-Path $Path) {
         try {
-            $existingData = Get-Content $Path -Raw | ConvertFrom-Json -Depth 5
+            $existingData = Get-Content $Path -Raw | ConvertFrom-Json
+
+            # Ensure the data can be used like a hashtable
+            if (-not $existingData.PSObject.Properties.Name) {
+                throw "Parsed JSON is not structured as expected."
+            }
         } catch {
             Write-Warning "Failed to parse existing JSON file. Starting fresh."
             $existingData = @{}
