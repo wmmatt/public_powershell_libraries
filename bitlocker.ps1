@@ -563,16 +563,35 @@ function Get-BitlockerDataSavedToDiskSummary {
         $history = $jsonData.$volumeID
         if ($history.Count -eq 0) { continue }
 
-        # Grab the latest entry (sorted by date if needed)
-        $latest = $history | Sort-Object Date -Descending | Select-Object -First 1
+        $flattened = foreach ($entry in $history) {
+            $keys = if ($entry.RecoveryPassword -is [array]) {
+                $entry.RecoveryPassword
+            } else {
+                @($entry.RecoveryPassword)
+            }
 
-        # Flatten recovery keys array if it is an array
-        $key = if ($latest.RecoveryPassword -is [array]) {
-            ($latest.RecoveryPassword -ne "") -join ", "
-        } else {
-            $latest.RecoveryPassword
+            foreach ($k in $keys) {
+                if ($k -and $k -ne 'None' -and $k -ne '') {
+                    [PSCustomObject]@{
+                        RecoveryPassword = $k
+                        Date             = [datetime]$entry.Date
+                        MountPoint       = $entry.MountPoint
+                    }
+                }
+            }
         }
 
-        "Date: $($latest.Date), ID: $volumeID, Letter: $($latest.MountPoint), RecoveryPassword: $key"
+        if (-not $flattened) { continue }
+
+        # Group by key, select most recent date per key
+        $latestKeyEntry = $flattened |
+            Group-Object RecoveryPassword |
+            ForEach-Object {
+                $_.Group | Sort-Object Date -Descending | Select-Object -First 1
+            } |
+            Sort-Object Date -Descending |
+            Select-Object -First 1
+
+        "Date: $($latestKeyEntry.Date.ToString('s')), ID: $volumeID, Letter: $($latestKeyEntry.MountPoint), RecoveryPassword: $($latestKeyEntry.RecoveryPassword)"
     }
 }
