@@ -446,3 +446,83 @@ function Set-EnforceBestPracticeEncryption {
         return "Confirmed volume [$($_.MountPoint)] is in best practice alignment!"
     }
 }
+
+function Save-BitlockerDataToDisk {
+    param (
+        [string]$Path = "$env:ProgramData\BitLockerHistory.json"
+    )
+
+    # Get current BitLocker data from your main function
+    $currentData = Get-BitlockerData
+
+    # Load existing file if it exists
+    if (Test-Path $Path) {
+        try {
+            $existingData = Get-Content $Path -Raw | ConvertFrom-Json
+        } catch {
+            Write-Warning "Failed to parse existing JSON file. Starting fresh."
+            $existingData = @{}
+        }
+    } else {
+        $existingData = @{}
+    }
+
+    # If file didn't deserialize into a hashtable, initialize it
+    if (-not ($existingData -is [hashtable])) {
+        $existingData = @{}
+    }
+
+    # Append or update data
+    foreach ($vol in $currentData) {
+        $volumeID = $vol.VolumeID
+
+        if (-not $existingData.ContainsKey($volumeID)) {
+            $existingData[$volumeID] = @()
+        }
+
+        # Check if key already exists in history
+        $existingKeys = $existingData[$volumeID] | ForEach-Object { $_.RecoveryPassword }
+
+        if ($vol.RecoveryPassword -ne 'None' -and -not $existingKeys -contains $vol.RecoveryPassword) {
+            $entry = [PSCustomObject]@{
+                Date              = (Get-Date).ToString('s')
+                MountPoint        = $vol.MountPoint
+                RecoveryPassword  = $vol.RecoveryPassword
+                VolumeType        = $vol.VolumeType
+                EncryptionMethod  = $vol.EncryptionMethod
+                VolumeStatus      = $vol.VolumeStatus
+                ProtectionStatus  = $vol.ProtectionStatus
+                LockStatus        = $vol.LockStatus
+                EncryptionPercent = $vol.EncryptionPercentage
+            }
+
+            $existingData[$volumeID] += $entry
+        }
+    }
+
+    # Save updated JSON to disk
+    $existingData | ConvertTo-Json -Depth 5 | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Get-BitlockerDataSavedToDisk {
+    $filePath = "$env:ProgramData\BitLockerHistory.json"
+    if (-not (Test-Path $filePath)) {
+        Write-Warning "BitLocker history file not found."
+        return @()
+    }
+
+    $raw = Get-Content $filePath -Raw | ConvertFrom-Json
+    $result = @()
+
+    foreach ($volumeID in $raw.PSObject.Properties.Name) {
+        $entries = $raw.$volumeID
+        if ($entries -and $entries.Count -gt 0) {
+            foreach ($entry in $entries) {
+                $entry | Add-Member -NotePropertyName VolumeID -NotePropertyValue $volumeID -Force
+                $result += $entry
+            }
+        }
+    }
+
+    return $result
+}
