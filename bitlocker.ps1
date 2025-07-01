@@ -551,6 +551,6 @@ function Get-BitlockerDataSavedToDiskSummary {
             $latest.RecoveryPassword
         }
 
-        "$volumeID, $($latest.MountPoint), $key"
+        "ID: $volumeID, Letter: $($latest.MountPoint), RecoveryPassword: $key"
     }
 }
