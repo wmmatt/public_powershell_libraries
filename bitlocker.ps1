@@ -403,7 +403,8 @@ function Set-EnforceBestPracticeEncryption {
         [string]$WhatShouldBeEncrypted = 'InternalOnly'
     )
 
-    Confirm-EncryptionReadiness -Remediate $true
+    $output = @()
+    $output += Confirm-EncryptionReadiness -Remediate $true
 
     # Previous revisions were piping Get-InternvalVolumes to Get-BitlockerData, but Get-BitlockerData 
     # doesn't support selecting volumes... so effectively, this was ignoring internal only, and using
@@ -416,35 +417,61 @@ function Set-EnforceBestPracticeEncryption {
         'InternalAndExternal'  { $allBitlockerData }
     }
 
-    $volumes | ForEach {
-        if ($_.VolumeStatus -eq 'FullyDecrypted') {
-            Write-Output "Best practice misalignment: Volume letter [$($_.MountPoint)] is not encrypted"
-            Enable-SelectVolumeFullDiskEncryption -MountPoint $_.MountPoint
-            return "Initiated encryption on volume letter [$($_.MountPoint)]"
-        } 
+    foreach ($vol in $volumes) {
+        switch ($vol.VolumeStatus) {
+            'EncryptionPaused' {
+                $output += "Best practice misalignment: Volume letter [$($vol.MountPoint)] had encryption paused"
+                $output += Resume-BitLocker -MountPoint $vol.MountPoint -ErrorAction Stop | Out-Null
+                $output += "Resumed protection on volume letter [$($vol.MountPoint)]"
+            }
 
-        if ($_.VolumeStatus -eq 'EncryptionPaused' -or $_.VolumeStatus -eq 'PartiallyEncrypted') {
-            Write-Output "Best practice misalignment: Volume letter [$($_.MountPoint)] had encryption paused"
-            Resume-BitLocker -MountPoint $_.MountPoint -ErrorAction Stop
-            return "Resumed protection on volume letter [$($_.VolumeStatus)]"
+            'PartiallyEncrypted' {
+                $output += "Best practice misalignment: Volume letter [$($vol.MountPoint)] had encryption paused"
+                $output += Resume-BitLocker -MountPoint $vol.MountPoint -ErrorAction Stop | Out-Null
+                $output += "Resumed protection on volume letter [$($vol.MountPoint)]"
+            }
+
+            'DecryptionPaused' {
+                $output += "Best practice misalignment: Volume letter [$($vol.MountPoint)] had decryption paused"
+                $output += Disable-BitLocker -MountPoint $vol.MountPoint -ErrorAction Stop | Out-Null
+                $output += "Resumed decryption on volume letter [$($vol.MountPoint)]"
+            }
+
+            'DecryptionInProgress' {
+                $output += "Volume letter [$($vol.MountPoint)] is currently decrypting"
+            }
+
+            'PartiallyDecrypted' {
+                $output += "Best practice misalignment: Volume letter [$($vol.MountPoint)] had decryption paused"
+                $output += Disable-BitLocker -MountPoint $vol.MountPoint -ErrorAction Stop | Out-Null
+                $output += "Resumed decryption on volume letter [$($vol.MountPoint)]"
+            }
+
+            'FullyDecrypted' {
+                $output += "Best practice misalignment: Volume letter [$($vol.MountPoint)] is not encrypted"
+                $output += Enable-SelectVolumeFullDiskEncryption -MountPoint $vol.MountPoint
+                Save-BitlockerDataToDisk
+                $output += "Initiated encryption on volume letter [$($vol.MountPoint)]"
+            }
+
+            'FullyEncrypted' {
+                if ($vol.EncryptionMethod -ne $ExpectedEncryptionMethod) {
+                    $output += "Best practice misalignment: Volume letter [$($vol.MountPoint)] has encryption method of [$($vol.EncryptionMethod)] when the expected method is $ExpectedEncryptionMethod"
+                    $output += Disable-BitLocker -MountPoint $vol.MountPoint -ErrorAction Stop | Out-Null
+                    $output += "Initiated decryption of volume letter [$($vol.MountPoint)]"
+                } else {
+                    $output += "Confirmed volume [$($vol.MountPoint)] is in best practice alignment!"  
+                }
+            }
         }
-
-        if ($_.VolumeStatus -eq 'DecryptionPaused' -or $_.VolumeStatus -eq 'PartiallyDecrypted') {
-            Write-Output "Best practice misalignment: Volume letter [$($_.MountPoint)] had decryption paused"
-            Disable-BitLocker -MountPoint $_.MountPoint -ErrorAction Stop
-            return "Resumed decryption on volume letter [$($_.VolumeStatus)]"
-        }
-
-        if ($_.EncryptionMethod -ne $ExpectedEncryptionMethod) {
-            Write-Output "Best practice misalignment: Volume letter [$($_.MountPoint)] has encryption method of [$($_.EncryptionMethod)] when the expected method is $ExpectedEncryptionMethod" 
-            Disable-Bitlocker -MountPoint $_.MountPoint -ErrorAction Stop
-            return "Initiated decryption of volume letter [$($_.VolumeStatus)]"
-        }
-
-        Get-BitlockerData
-
-        return "Confirmed volume [$($_.MountPoint)] is in best practice alignment!"
     }
+
+    $bitlockerInfo = Get-BitlockerData
+    foreach ($vol in $bitlockerInfo) {
+        $output += "Volume [$($vol.MountPoint)] | ID: $($vol.VolumeID) | Status: $($vol.VolumeStatus) | Encrypted: $($vol.EncryptionPercentage)% | Method: $($vol.EncryptionMethod) | RecoveryKey(s): $($vol.RecoveryPassword -join ', ')"
+    }
+
+    return $output -join "`n"
 }
 
 function Save-BitlockerDataToDisk {
