@@ -479,60 +479,40 @@ function Save-BitlockerDataToDisk {
         [string]$Path = "$env:ProgramData\BitLockerHistory.json"
     )
 
+    # Load current BitLocker data
     $currentData = Get-BitlockerData
 
-    # Skip if no volumes have a usable recovery key
-    $hasAnyRecoveryKeys = $currentData | Where-Object {
-        $keys = $_.RecoveryPassword
-        if ($keys -is [array]) {
-            $keys = $keys | Where-Object { $_ -and $_ -ne 'None' -and $_ -ne '' }
-        } elseif ($keys -eq 'None' -or $keys -eq '') {
-            $keys = @()
-        }
-        $keys.Count -gt 0
-    }
-
-    if (-not $hasAnyRecoveryKeys) {
-        return
-    }
-
-    # Load existing file if it exists
+    # Load existing data from disk
     if (Test-Path $Path) {
         try {
-            $rawData = Get-Content $Path -Raw | ConvertFrom-Json
-            $existingData = ConvertTo-Hashtable $rawData
+            $raw = Get-Content $Path -Raw | ConvertFrom-Json
+            $existingData = @{}
+            foreach ($volID in $raw.PSObject.Properties.Name) {
+                $existingData[$volID] = $raw.$volID
+            }
         } catch {
+            Write-Warning "Could not read existing JSON. Starting fresh."
             $existingData = @{}
         }
     } else {
         $existingData = @{}
     }
 
-    # Create merged copy: update volumes that had new keys, leave others untouched
-    $mergedData = @{}
-
-    # Start with ALL previous data untouched
-    foreach ($key in $existingData.Keys) {
-        $mergedData[$key] = $existingData[$key]
-    }
-
-    # Then ADD new data, but do not remove anything
+    # Merge new data
     foreach ($vol in $currentData) {
-        $volumeID = $vol.VolumeID
-
-        if (-not $mergedData.ContainsKey($volumeID)) {
-            $mergedData[$volumeID] = @()
+        $volID = $vol.VolumeID
+        if (-not $existingData.ContainsKey($volID)) {
+            $existingData[$volID] = @()
         }
 
-        $existingKeys = $mergedData[$volumeID] | ForEach-Object {
+        $existingKeys = $existingData[$volID] | ForEach-Object {
             if ($_.RecoveryPassword -is [array]) { $_.RecoveryPassword } else { @($_.RecoveryPassword) }
-        }
+        } | Select-Object -Unique
 
-        $flatExistingKeys = $existingKeys | Select-Object -Unique
         $newKeys = if ($vol.RecoveryPassword -is [array]) { $vol.RecoveryPassword } else { @($vol.RecoveryPassword) }
 
         foreach ($key in $newKeys) {
-            if ($key -and $key -ne 'None' -and ($flatExistingKeys -notcontains $key)) {
+            if ($key -and $key -ne 'None' -and ($existingKeys -notcontains $key)) {
                 $entry = [PSCustomObject]@{
                     Date              = (Get-Date).ToString('s')
                     MountPoint        = $vol.MountPoint
@@ -544,12 +524,13 @@ function Save-BitlockerDataToDisk {
                     LockStatus        = $vol.LockStatus
                     EncryptionPercent = $vol.EncryptionPercentage
                 }
-                $mergedData[$volumeID] += $entry
+                $existingData[$volID] += $entry
             }
         }
     }
 
-    $mergedData | ConvertTo-Json -Depth 5 | Set-Content -Path $Path -Encoding UTF8
+    # Write full data without dropping anything
+    [pscustomobject]$existingData | ConvertTo-Json -Depth 5 | Set-Content -Path $Path -Encoding UTF8
 }
 
 function Get-BitlockerDataSavedToDisk {
