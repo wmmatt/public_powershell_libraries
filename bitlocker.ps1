@@ -479,7 +479,6 @@ function Save-BitlockerDataToDisk {
         [string]$Path = "$env:ProgramData\BitLockerHistory.json"
     )
 
-    # Load current BitLocker data
     $currentData = Get-BitlockerData
 
     # Skip if no volumes have a usable recovery key
@@ -494,7 +493,6 @@ function Save-BitlockerDataToDisk {
     }
 
     if (-not $hasAnyRecoveryKeys) {
-        Write-Output "No recovery keys found. Skipping JSON update to preserve history."
         return
     }
 
@@ -504,33 +502,37 @@ function Save-BitlockerDataToDisk {
             $rawData = Get-Content $Path -Raw | ConvertFrom-Json
             $existingData = ConvertTo-Hashtable $rawData
         } catch {
-            Write-Warning "Failed to parse existing JSON file. Starting fresh."
             $existingData = @{}
         }
     } else {
         $existingData = @{}
     }
 
+    # Create merged copy: update volumes that had new keys, leave others untouched
+    $mergedData = @{}
+
+    # Start with ALL previous data untouched
+    foreach ($key in $existingData.Keys) {
+        $mergedData[$key] = $existingData[$key]
+    }
+
+    # Then ADD new data, but do not remove anything
     foreach ($vol in $currentData) {
         $volumeID = $vol.VolumeID
 
-        if (-not $existingData.ContainsKey($volumeID)) {
-            $existingData[$volumeID] = @()
+        if (-not $mergedData.ContainsKey($volumeID)) {
+            $mergedData[$volumeID] = @()
         }
 
-        $existingKeys = $existingData[$volumeID] | ForEach-Object {
+        $existingKeys = $mergedData[$volumeID] | ForEach-Object {
             if ($_.RecoveryPassword -is [array]) { $_.RecoveryPassword } else { @($_.RecoveryPassword) }
         }
 
-        # Flatten to a single list of known keys
         $flatExistingKeys = $existingKeys | Select-Object -Unique
-
-        # Flatten current key(s) too
         $newKeys = if ($vol.RecoveryPassword -is [array]) { $vol.RecoveryPassword } else { @($vol.RecoveryPassword) }
 
-        # Save all new keys that don't already exist
         foreach ($key in $newKeys) {
-            if ($key -ne '' -and $key -ne 'None' -and $flatExistingKeys -notcontains $key) {
+            if ($key -and $key -ne 'None' -and ($flatExistingKeys -notcontains $key)) {
                 $entry = [PSCustomObject]@{
                     Date              = (Get-Date).ToString('s')
                     MountPoint        = $vol.MountPoint
@@ -542,31 +544,12 @@ function Save-BitlockerDataToDisk {
                     LockStatus        = $vol.LockStatus
                     EncryptionPercent = $vol.EncryptionPercentage
                 }
-
-                $existingData[$volumeID] += $entry
+                $mergedData[$volumeID] += $entry
             }
-        }
-
-        # Only add if new recovery key is non-empty and not already recorded
-        if ($vol.RecoveryPassword -ne 'None' -and -not $existingKeys -contains $vol.RecoveryPassword) {
-            $entry = [PSCustomObject]@{
-                Date              = (Get-Date).ToString('s')
-                MountPoint        = $vol.MountPoint
-                RecoveryPassword  = $vol.RecoveryPassword
-                VolumeType        = $vol.VolumeType
-                EncryptionMethod  = $vol.EncryptionMethod
-                VolumeStatus      = $vol.VolumeStatus
-                ProtectionStatus  = $vol.ProtectionStatus
-                LockStatus        = $vol.LockStatus
-                EncryptionPercent = $vol.EncryptionPercentage
-            }
-
-            $existingData[$volumeID] += $entry
         }
     }
 
-    # Save merged data — keeps ALL volumeIDs and keys
-    $existingData | ConvertTo-Json -Depth 5 | Set-Content -Path $Path -Encoding UTF8
+    $mergedData | ConvertTo-Json -Depth 5 | Set-Content -Path $Path -Encoding UTF8
 }
 
 function Get-BitlockerDataSavedToDisk {
