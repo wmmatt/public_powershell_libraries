@@ -330,60 +330,45 @@ function Get-BitlockerData {
 function Confirm-EncryptionBestPracticeState {
     <#
         .DESCRIPTION
-        Confirm the following condtions are met:
-            - OS is supported
-            - TPM is present
-            - TPM is enabled
-            - TPM is activated
-            - TPM is owned
-            - All volumes you specify are encrypted
-            - The Encrypted Method is what you spcify on all volumes
+        Confirm all BitLocker encryption best practices are met:
+        - TPM is present and ready
+        - Only specified volume types are checked
+        - All volumes are FullyEncrypted
+        - All volumes use the expected encryption method
     #>
 
     [CmdletBinding()]
-
-    Param(
-        [Parameter(
-            HelpMessage='Set the expected encryption method'
-        )]
+    param(
         [ValidateSet('Aes128', 'Aes256', 'XtsAes128', 'XtsAes256')]
         [string]$ExpectedEncryptionMethod = 'Aes256',
 
-        [Parameter(
-            HelpMessage='Set the types of volumes that should be encrypted'
-        )]
         [ValidateSet('InternalOnly', 'InternalAndExternal')]
         [string]$WhatShouldBeEncrypted = 'InternalOnly'
     )
 
-
-    switch ($WhatShouldBeEncrypted) {
-        'InternalOnly'          { $volumeType = 'Internal' }
-        'InternalAndExternal'   { $volumeType =  'Internal', 'External'}
-    }
-
     try {
-        Confirm-EncryptionReadiness
+        # Gather volume info
+        $internalVolumes = (Get-InternalVolumes | Where-Object { $_.DriveLetter }) | ForEach-Object { "$($_.DriveLetter):" }
+        $allVolumes = Get-BitlockerData
 
-        switch ($WhatShouldBeEncrypted) {
-            'InternalOnly'          { $volumes = Get-UnencryptedInternalVolumes }
-            'InternalAndExternal'   { $volumes = Get-AllUnencryptedVolumes }
+        $volumesToCheck = switch ($WhatShouldBeEncrypted) {
+            'InternalOnly'         { $allVolumes | Where-Object { $internalVolumes -contains $_.MountPoint } }
+            'InternalAndExternal'  { $allVolumes }
         }
 
-        if ($volumes) {
-            throw "Found unencrypted volumes: $volumes"
-        }
+        foreach ($vol in $volumesToCheck) {
+            if ($vol.VolumeStatus -ne 'FullyEncrypted') {
+                throw "Volume [$($vol.MountPoint)] is not fully encrypted. Status: $($vol.VolumeStatus)"
+            }
 
-        $volumes | ForEach {
-            if ($_.EncryptionMethod -ne $ExpectedEncryptionMethod) {
-                throw "Expected [$ExpectedEncryptionMethod], found [$($_.EncryptionMethod)]"
+            if ($vol.EncryptionMethod -ne $ExpectedEncryptionMethod) {
+                throw "Volume [$($vol.MountPoint)] has method [$($vol.EncryptionMethod)], expected [$ExpectedEncryptionMethod]"
             }
         }
-
-        # This means we didn't throw, so good to go
+        
         return $true
-    } catch {
-        # We have exactly what is wrong sitting in $_ here, but I like having a truthy/falsy out for pass/fail
+    }
+    catch {
         return $false
     }
 }
@@ -496,6 +481,7 @@ function Save-BitlockerDataToDisk {
         }
     } else {
         $existingData = @{}
+        
     }
 
     # Merge new data
