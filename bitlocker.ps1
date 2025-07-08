@@ -365,7 +365,7 @@ function Confirm-EncryptionBestPracticeState {
                 throw "Volume [$($vol.MountPoint)] has method [$($vol.EncryptionMethod)], expected [$ExpectedEncryptionMethod]"
             }
         }
-        
+
         return $true
     }
     catch {
@@ -461,7 +461,7 @@ function Set-EnforceBestPracticeEncryption {
 
 function Save-BitlockerDataToDisk {
     param (
-        [string]$Path = "$env:ProgramData\BitLockerHistory.json"
+        [string]$Path = "$env:ProgramData\Bitlocker\BitLockerHistory.json"
     )
 
     # Load current BitLocker data
@@ -515,12 +515,21 @@ function Save-BitlockerDataToDisk {
         }
     }
 
-    # Write full data without dropping anything
-    [pscustomobject]$existingData | ConvertTo-Json -Depth 5 | Set-Content -Path $Path -Encoding UTF8
+    # Convert the final data to JSON once
+    $jsonOut = [pscustomobject]$existingData | ConvertTo-Json -Depth 5
+
+    # Write revision copy
+    $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+    $folderPath = Split-Path -Path $Path -Parent
+    $revPath = Join-Path $folderPath "BitLockerHistory_$timestamp.json"
+    $jsonOut | Set-Content -Path $revPath -Encoding UTF8
+
+    # Write to main file
+    $jsonOut | Set-Content -Path $Path -Encoding UTF8
 }
 
 function Get-BitlockerDataSavedToDisk {
-    $filePath = "$env:ProgramData\BitLockerHistory.json"
+    $filePath = "$env:ProgramData\Bitlocker\BitLockerHistory.json"
     if (-not (Test-Path $filePath)) {
         Write-Warning "BitLocker history file not found."
         return @()
@@ -543,7 +552,7 @@ function Get-BitlockerDataSavedToDisk {
 }
 
 function Get-BitlockerDataSavedToDiskSummary {
-    $jsonPath = "$env:ProgramData\BitLockerHistory.json"
+    $jsonPath = "$env:ProgramData\Bitlocker\BitLockerHistory.json"
 
     if (!(Test-Path $jsonPath)) {
         Write-Warning "No BitLocker history file found at $jsonPath"
