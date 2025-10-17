@@ -550,9 +550,7 @@ function Convert-LockStatusToString {
 
 #endregion
 
-#endregion
-
-#region Core Save Function<#
+<# region Core Save Function
 .SYNOPSIS
     BitLocker recovery key storage using Windows Registry
 
