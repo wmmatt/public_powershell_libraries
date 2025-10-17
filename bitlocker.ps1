@@ -1206,36 +1206,3 @@ function Export-BitlockerKeysToFile {
 }
 
 #endregion
-
-#region For NinjaRMM Integration
-
-function Get-BitlockerKeysForNinja {
-    <#
-    .SYNOPSIS
-        Gets BitLocker keys in format optimized for NinjaRMM custom fields
-        
-    .DESCRIPTION
-        Returns a formatted string suitable for storing in Ninja custom fields.
-        Shows most recent key for each volume.
-        
-    .OUTPUTS
-        String - Formatted key data for Ninja
-        
-    .EXAMPLE
-        $keys = Get-BitlockerKeysForNinja
-        Ninja-Property-Set bitlockerKeys $keys
-    #>
-    [CmdletBinding()]
-    [OutputType([string])]
-    param()
-    
-    $summary = Get-BitlockerDataSavedToDiskSummary
-    
-    if ($summary.Count -eq 0) {
-        return "No BitLocker keys found"
-    }
-    
-    return $summary -join "`n"
-}
-
-#endregion
