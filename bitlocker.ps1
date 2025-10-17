@@ -550,7 +550,9 @@ function Convert-LockStatusToString {
 
 #endregion
 
-<# region Core Save Function
+#endregion
+
+#region Core Save Function<#
 .SYNOPSIS
     BitLocker recovery key storage using Windows Registry
 
@@ -915,7 +917,7 @@ function Get-BitlockerDataSavedToDiskSummary {
         IMPORTANT: This shows ALL volumes in registry, including disconnected drives.
         
     .OUTPUTS
-        Array of strings with formatted key information
+        String - Formatted key data (one line per volume, joined with newlines)
         
     .EXAMPLE
         Get-BitlockerDataSavedToDiskSummary
@@ -924,9 +926,13 @@ function Get-BitlockerDataSavedToDiskSummary {
     .EXAMPLE
         Get-BitlockerDataSavedToDiskSummary | Out-File C:\keys.txt
         Exports key summary to file
+        
+    .EXAMPLE
+        $keys = Get-BitlockerDataSavedToDiskSummary
+        Ninja-Property-Set bitlockerKeys $keys
     #>
     [CmdletBinding()]
-    [OutputType([string[]])]
+    [OutputType([string])]
     param()
     
     try {
@@ -934,8 +940,7 @@ function Get-BitlockerDataSavedToDiskSummary {
         $allData = Get-AllExistingRegistryData
         
         if ($allData.Count -eq 0) {
-            Write-Warning "No BitLocker data found in registry"
-            return @()
+            return "No BitLocker keys found"
         }
         
         $summary = @()
@@ -951,11 +956,15 @@ function Get-BitlockerDataSavedToDiskSummary {
             $sortedEntries = $entries | Sort-Object { [datetime]$_.Date } -Descending
             $mostRecent = $sortedEntries[0]
             
+            # Format date as mm/dd/yy
+            $formattedDate = ([datetime]$mostRecent.Date).ToString('MM/dd/yy')
+            
             # Format output
             $output = "VolumeID: $volumeID | " +
-                      "Date: $($mostRecent.Date) | " +
-                      "Mount: $($mostRecent.MountPoint) | " +
-                      "Type: $($mostRecent.DriveType) | " +
+                      "Date: $formattedDate | " +
+                      "VolumeLetter: $($mostRecent.MountPoint) | " +
+                      "VolumeType: $($mostRecent.VolumeType) | " +
+                      "DriveType: $($mostRecent.DriveType) | " +
                       "Status: $($mostRecent.VolumeStatus) | " +
                       "Encrypted: $($mostRecent.EncryptionPercent)% | " +
                       "Method: $($mostRecent.EncryptionMethod) | " +
@@ -965,7 +974,8 @@ function Get-BitlockerDataSavedToDiskSummary {
             $summary += $output
         }
         
-        return $summary
+        # Return as single string (joined with newlines)
+        return $summary -join "`n"
         
     } catch {
         Write-Error "Error getting BitLocker key summary: $($_.Exception.Message)"
