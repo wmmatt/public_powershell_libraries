@@ -813,7 +813,7 @@ function Merge-VolumeData {
                 Date              = (Get-Date).ToString('o')  # ISO 8601 format
                 MountPoint        = $vol.MountPoint
                 RecoveryPassword  = $key
-                VolumeType        = $vol.VolumeType
+                VolumeType        = [string]$vol.VolumeType
                 EncryptionMethod  = [string]$vol.EncryptionMethod
                 VolumeStatus      = [string]$vol.VolumeStatus
                 ProtectionStatus  = [string]$vol.ProtectionStatus
