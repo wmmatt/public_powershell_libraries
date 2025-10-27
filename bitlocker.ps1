@@ -794,29 +794,31 @@ function Merge-VolumeData {
             }
         }
         
-        # Only update if keys changed OR it's a new volume
-        if ($keysChanged -or !$merged.ContainsKey($volumeID)) {
-            # Create single entry with latest data (REPLACE, not append)
-            $latestEntry = [PSCustomObject]@{
-                Date              = (Get-Date).ToString('o')  # ISO 8601 format
-                MountPoint        = $vol.MountPoint
-                RecoveryPassword  = $currentKeys | Where-Object { $_ -and $_ -ne 'None' }
-                VolumeType        = [string]$vol.VolumeType
-                EncryptionMethod  = [string]$vol.EncryptionMethod
-                VolumeStatus      = [string]$vol.VolumeStatus
-                ProtectionStatus  = [string]$vol.ProtectionStatus
-                LockStatus        = [string]$vol.LockStatus
-                EncryptionPercent = $vol.EncryptionPercentage
-                DriveType         = $vol.DriveType
-            }
-            
-            # REPLACE entire array with single latest entry
-            $merged[$volumeID] = @($latestEntry)
-            
-            $action = if ($existingKeys.Count -gt 0) { "Updated" } else { "Added" }
-            Write-Verbose "Volume $volumeID : $action with latest key(s)"
+        # ALWAYS create single entry with latest data for currently-connected volumes
+        # This consolidates any historical entries into a single entry
+        $latestEntry = [PSCustomObject]@{
+            Date              = (Get-Date).ToString('o')  # ISO 8601 format
+            MountPoint        = $vol.MountPoint
+            RecoveryPassword  = $currentKeys | Where-Object { $_ -and $_ -ne 'None' }
+            VolumeType        = [string]$vol.VolumeType
+            EncryptionMethod  = [string]$vol.EncryptionMethod
+            VolumeStatus      = [string]$vol.VolumeStatus
+            ProtectionStatus  = [string]$vol.ProtectionStatus
+            LockStatus        = [string]$vol.LockStatus
+            EncryptionPercent = $vol.EncryptionPercentage
+            DriveType         = $vol.DriveType
+        }
+        
+        # REPLACE entire array with single latest entry (even if key hasn't changed)
+        $merged[$volumeID] = @($latestEntry)
+        
+        # Log what happened
+        if (!$hadExistingData) {
+            Write-Verbose "Volume $volumeID : Added new entry"
+        } elseif ($keysChanged) {
+            Write-Verbose "Volume $volumeID : Key changed - updated with latest"
         } else {
-            Write-Verbose "Volume $volumeID : No changes detected"
+            Write-Verbose "Volume $volumeID : Key unchanged - consolidated to single entry"
         }
     }
     
