@@ -334,12 +334,12 @@ function Confirm-EncryptionBestPracticeState {
         - TPM is present and ready
         - Only specified volume types are checked
         - All volumes are FullyEncrypted
-        - All volumes use the expected encryption method
+        - All volumes use the expected encryption method (unless 'Any' is specified)
     #>
 
     [CmdletBinding()]
     param(
-        [ValidateSet('Aes128', 'Aes256', 'XtsAes128', 'XtsAes256')]
+        [ValidateSet('Aes128', 'Aes256', 'XtsAes128', 'XtsAes256', 'Any')]
         [string]$ExpectedEncryptionMethod = 'Aes256',
 
         [ValidateSet('InternalOnly', 'InternalAndExternal')]
@@ -361,7 +361,8 @@ function Confirm-EncryptionBestPracticeState {
                 throw "Volume [$($vol.MountPoint)] is not fully encrypted. Status: $($vol.VolumeStatus)"
             }
 
-            if ($vol.EncryptionMethod -ne $ExpectedEncryptionMethod) {
+            # Only check encryption method if a specific method is expected (not 'Any')
+            if ($ExpectedEncryptionMethod -ne 'Any' -and $vol.EncryptionMethod -ne $ExpectedEncryptionMethod) {
                 throw "Volume [$($vol.MountPoint)] has method [$($vol.EncryptionMethod)], expected [$ExpectedEncryptionMethod]"
             }
         }
@@ -378,7 +379,7 @@ function Set-EnforceBestPracticeEncryption {
         [Parameter(
             HelpMessage='Set the expected encryption method'
         )]
-        [ValidateSet('Aes128', 'Aes256', 'XtsAes128', 'XtsAes256')]
+        [ValidateSet('Aes128', 'Aes256', 'XtsAes128', 'XtsAes256', 'Any')]
         [string]$ExpectedEncryptionMethod = 'Aes256',
 
         [Parameter(
@@ -440,7 +441,8 @@ function Set-EnforceBestPracticeEncryption {
             }
 
             'FullyEncrypted' {
-                if ($vol.EncryptionMethod -ne $ExpectedEncryptionMethod) {
+                # Only check encryption method if a specific method is expected (not 'Any')
+                if ($ExpectedEncryptionMethod -ne 'Any' -and $vol.EncryptionMethod -ne $ExpectedEncryptionMethod) {
                     $output += "Best practice misalignment: Volume letter [$($vol.MountPoint)] has encryption method of [$($vol.EncryptionMethod)] when the expected method is $ExpectedEncryptionMethod"
                     $output += Disable-BitLocker -MountPoint $vol.MountPoint -ErrorAction Stop | Out-Null
                     $output += "Initiated decryption of volume letter [$($vol.MountPoint)]"
@@ -459,12 +461,8 @@ function Set-EnforceBestPracticeEncryption {
     return $output -join "`n"
 }
 
-#region Configuration
-
 # Registry root path - NEVER change this once in production
 $script:RegistryRootPath = "HKLM:\SOFTWARE\BitLockerHistory"
-
-#region Helper Functions for Enum Conversion
 
 function Convert-VolumeStatusToString {
     <#
@@ -548,9 +546,7 @@ function Convert-LockStatusToString {
     }
 }
 
-#endregion
-
-<# region Core Save Function
+<# Core Save Function
 .SYNOPSIS
     BitLocker recovery key storage using Windows Registry
 
@@ -660,10 +656,6 @@ function Save-BitlockerDataToDisk {
     }
 }
 
-#endregion
-
-#region Internal Functions
-
 function Get-AllExistingRegistryData {
     <#
     .SYNOPSIS
@@ -731,11 +723,11 @@ function Merge-VolumeData {
         Merges current system volumes with existing registry data
         
     .DESCRIPTION
-        CRITICAL MERGE LOGIC:
+        OPTION 1 MERGE LOGIC (Latest Keys Only):
         - Start with ALL existing registry data (includes disconnected drives)
-        - For each current volume, add ONLY NEW keys
-        - Never overwrite or remove existing keys
-        - Preserve all historical data
+        - For each current volume, REPLACE with latest key only
+        - Preserves disconnected volumes until they reconnect
+        - Keeps registry size minimal
         
     .PARAMETER CurrentVolumes
         Array of volume objects from Get-BitlockerData (current system state)
@@ -771,21 +763,6 @@ function Merge-VolumeData {
             continue
         }
         
-        # Initialize array for this volume if it doesn't exist
-        if (!$merged.ContainsKey($volumeID)) {
-            $merged[$volumeID] = @()
-            Write-Verbose "New volume detected: $volumeID"
-        }
-        
-        # Get all existing recovery keys for this volume
-        $existingKeys = $merged[$volumeID] | ForEach-Object {
-            if ($_.RecoveryPassword -is [array]) {
-                $_.RecoveryPassword
-            } else {
-                @($_.RecoveryPassword)
-            }
-        } | Where-Object { $_ -and $_ -ne 'None' } | Select-Object -Unique
-        
         # Get current keys for this volume
         $currentKeys = if ($vol.RecoveryPassword -is [array]) {
             $vol.RecoveryPassword
@@ -793,26 +770,37 @@ function Merge-VolumeData {
             @($vol.RecoveryPassword)
         }
         
-        # Add ONLY new keys that don't already exist
-        $newKeysAdded = 0
+        # Get existing keys (if any) for comparison
+        $existingKeys = @()
+        if ($merged.ContainsKey($volumeID)) {
+            $existingKeys = $merged[$volumeID] | ForEach-Object {
+                if ($_.RecoveryPassword -is [array]) {
+                    $_.RecoveryPassword
+                } else {
+                    @($_.RecoveryPassword)
+                }
+            } | Where-Object { $_ -and $_ -ne 'None' } | Select-Object -Unique
+        }
+        
+        # Check if keys have changed
+        $keysChanged = $false
         foreach ($key in $currentKeys) {
-            # Skip invalid keys
             if (!$key -or $key -eq 'None') {
                 continue
             }
-            
-            # Check if this key already exists
-            if ($existingKeys -contains $key) {
-                Write-Verbose "Volume $volumeID : Key already exists (skipping)"
-                continue
+            if ($existingKeys -notcontains $key) {
+                $keysChanged = $true
+                break
             }
-            
-            # Create new entry for this key
-            # CRITICAL: Force convert enum values to strings to prevent JSON serialization as integers
-            $newEntry = [PSCustomObject]@{
+        }
+        
+        # Only update if keys changed OR it's a new volume
+        if ($keysChanged -or !$merged.ContainsKey($volumeID)) {
+            # Create single entry with latest data (REPLACE, not append)
+            $latestEntry = [PSCustomObject]@{
                 Date              = (Get-Date).ToString('o')  # ISO 8601 format
                 MountPoint        = $vol.MountPoint
-                RecoveryPassword  = $key
+                RecoveryPassword  = $currentKeys | Where-Object { $_ -and $_ -ne 'None' }
                 VolumeType        = [string]$vol.VolumeType
                 EncryptionMethod  = [string]$vol.EncryptionMethod
                 VolumeStatus      = [string]$vol.VolumeStatus
@@ -822,15 +810,13 @@ function Merge-VolumeData {
                 DriveType         = $vol.DriveType
             }
             
-            # Add to merged data
-            $merged[$volumeID] += $newEntry
-            $newKeysAdded++
+            # REPLACE entire array with single latest entry
+            $merged[$volumeID] = @($latestEntry)
             
-            Write-Verbose "Volume $volumeID : Added NEW key ending in ...$(($key -split '-')[-1])"
-        }
-        
-        if ($newKeysAdded -eq 0) {
-            Write-Verbose "Volume $volumeID : No new keys to add (all keys already recorded)"
+            $action = if ($existingKeys.Count -gt 0) { "Updated" } else { "Added" }
+            Write-Verbose "Volume $volumeID : $action with latest key(s)"
+        } else {
+            Write-Verbose "Volume $volumeID : No changes detected"
         }
     }
     
@@ -898,10 +884,6 @@ function Save-MergedDataToRegistry {
     
     Write-Verbose "All volumes saved to registry successfully"
 }
-
-#endregion
-
-#region Read Functions
 
 function Get-BitlockerDataSavedToDiskSummary {
     <#
@@ -1052,10 +1034,6 @@ function Get-AllBitlockerKeyData {
     
     return Get-AllExistingRegistryData
 }
-
-#endregion
-
-#region Utility Functions
 
 function Clear-BitlockerRegistry {
     <#
@@ -1212,5 +1190,3 @@ function Export-BitlockerKeysToFile {
         throw
     }
 }
-
-#endregion
