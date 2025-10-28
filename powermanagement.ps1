@@ -90,7 +90,7 @@
         Best for: Presentations, demos (TEMPORARY - remember to restore after!)
     
 .NOTES
-    Version: 1.0
+    Version: 1.2 - Fixed Get-PowerPlan parsing bug and improved USB Selective Suspend error handling
     Author: Power Management Library
     Requires: PowerShell 5.1 or later (compatible with 5.1, 7.x)
     Many functions require Administrator privileges
@@ -162,17 +162,22 @@ function Get-PowerPlan {
         foreach ($plan in $plans) {
             $line = $plan.ToString()
             
-            # Extract GUID
+            # Extract GUID (between "GUID:" and the opening parenthesis)
             $guid = $null
-            if ($line -match '\(([^)]+)\)') {
+            if ($line -match 'Power Scheme GUID:\s*([0-9a-f-]+)') {
                 $guid = $Matches[1]
             }
             
-            $name = ($line -split ':\s*', 2)[1] -replace '\s*\(.*\)\s*', ''
+            # Extract Name (inside the parentheses)
+            $name = $null
+            if ($line -match '\(([^)]+)\)') {
+                $name = $Matches[1]
+            }
+            
             $isActive = $line -match '\*$'
             
             [PSCustomObject]@{
-                Name = $name.Trim()
+                Name = $name
                 GUID = $guid
                 IsActive = $isActive
             }
@@ -319,15 +324,59 @@ function Get-USBSelectiveSuspend {
     [CmdletBinding()]
     param()
     
-    $activeScheme = (Get-PowerPlan -Active).GUID
-    
-    $output = powercfg /query $activeScheme SUB_USB USBSELECTIVESUSPEND
-    $acValue = [int](($output | Select-String "Current AC Power Setting Index:").ToString().Split()[-1])
-    $dcValue = [int](($output | Select-String "Current DC Power Setting Index:").ToString().Split()[-1])
-    
-    [PSCustomObject]@{
-        ACPower_Enabled = $acValue -eq 1
-        BatteryPower_Enabled = $dcValue -eq 1
+    try {
+        $activeScheme = (Get-PowerPlan -Active).GUID
+        
+        # USB Selective Suspend GUID: 2a737441-1930-4402-8d77-b2bebba308a3
+        # SUB_USB GUID: 2a737441-1930-4402-8d77-b2bebba308a3
+        # Redirect all output including errors to capture them silently
+        $output = powercfg /query $activeScheme 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 2>&1 | Out-String
+        
+        # Check if command failed or returned invalid parameters
+        if ([string]::IsNullOrWhiteSpace($output) -or $output -match "Invalid Parameters" -or $output -match "error" -or $output -match "Element not found") {
+            Write-Verbose "USB Selective Suspend query not supported on this system"
+            return [PSCustomObject]@{
+                ACPower_Enabled = $null
+                BatteryPower_Enabled = $null
+                Supported = $false
+            }
+        }
+        
+        # Try to extract the AC and DC values
+        $acLine = $output | Select-String "Current AC Power Setting Index:" -Quiet
+        $dcLine = $output | Select-String "Current DC Power Setting Index:" -Quiet
+        
+        if ($acLine -and $dcLine) {
+            $acMatch = [regex]::Match($output, "Current AC Power Setting Index:\s*0x([0-9a-fA-F]+)")
+            $dcMatch = [regex]::Match($output, "Current DC Power Setting Index:\s*0x([0-9a-fA-F]+)")
+            
+            if ($acMatch.Success -and $dcMatch.Success) {
+                $acValue = [Convert]::ToInt32($acMatch.Groups[1].Value, 16)
+                $dcValue = [Convert]::ToInt32($dcMatch.Groups[1].Value, 16)
+                
+                return [PSCustomObject]@{
+                    ACPower_Enabled = $acValue -eq 1
+                    BatteryPower_Enabled = $dcValue -eq 1
+                    Supported = $true
+                }
+            }
+        }
+        
+        # If we got here, parsing failed
+        Write-Verbose "Could not parse USB Selective Suspend settings"
+        return [PSCustomObject]@{
+            ACPower_Enabled = $null
+            BatteryPower_Enabled = $null
+            Supported = $false
+        }
+        
+    } catch {
+        Write-Verbose "Error querying USB Selective Suspend: $_"
+        return [PSCustomObject]@{
+            ACPower_Enabled = $null
+            BatteryPower_Enabled = $null
+            Supported = $false
+        }
     }
 }
 
@@ -580,21 +629,35 @@ function Set-USBSelectiveSuspend {
         throw "Administrator privileges required"
     }
     
-    $activeScheme = (Get-PowerPlan -Active).GUID
-    $value = if ($Enabled) { 1 } else { 0 }
-    
-    if ($ACOnly) {
-        powercfg /setacvalueindex $activeScheme SUB_USB USBSELECTIVESUSPEND $value
+    try {
+        $activeScheme = (Get-PowerPlan -Active).GUID
+        $value = if ($Enabled) { 1 } else { 0 }
+        
+        # USB Settings GUID: 2a737441-1930-4402-8d77-b2bebba308a3
+        # USB Selective Suspend GUID: 48e6b7a6-50f5-4782-a5d4-53bb8f07e226
+        $usbGuid = "2a737441-1930-4402-8d77-b2bebba308a3"
+        $selectiveSuspendGuid = "48e6b7a6-50f5-4782-a5d4-53bb8f07e226"
+        
+        if ($ACOnly) {
+            $result = powercfg /setacvalueindex $activeScheme $usbGuid $selectiveSuspendGuid $value 2>&1 | Out-String
+        }
+        elseif ($BatteryOnly) {
+            $result = powercfg /setdcvalueindex $activeScheme $usbGuid $selectiveSuspendGuid $value 2>&1 | Out-String
+        }
+        else {
+            $result = powercfg /setacvalueindex $activeScheme $usbGuid $selectiveSuspendGuid $value 2>&1 | Out-String
+            powercfg /setdcvalueindex $activeScheme $usbGuid $selectiveSuspendGuid $value 2>&1 | Out-Null
+        }
+        
+        if ($result -match "Invalid Parameters" -or $result -match "error" -or $result -match "Element not found") {
+            Write-Warning "USB Selective Suspend setting may not be supported on this system"
+        } else {
+            powercfg /setactive $activeScheme 2>&1 | Out-Null
+            Write-Verbose "USB Selective Suspend $(if($Enabled){'enabled'}else{'disabled'})"
+        }
+    } catch {
+        Write-Warning "Failed to set USB Selective Suspend: $_"
     }
-    elseif ($BatteryOnly) {
-        powercfg /setdcvalueindex $activeScheme SUB_USB USBSELECTIVESUSPEND $value
-    }
-    else {
-        powercfg /setacvalueindex $activeScheme SUB_USB USBSELECTIVESUSPEND $value
-        powercfg /setdcvalueindex $activeScheme SUB_USB USBSELECTIVESUSPEND $value
-    }
-    
-    powercfg /setactive $activeScheme
 }
 
 #endregion
@@ -674,7 +737,7 @@ function Set-PowerPreset {
             Set-SleepTimeout -Minutes 0
             Set-MonitorTimeout -Minutes 15
             Set-DiskTimeout -Minutes 0
-            Set-USBSelectiveSuspend -Disabled
+            Set-USBSelectiveSuspend -Disabled -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             Write-Host "✓ High Performance preset applied" -ForegroundColor Green
         }
         
@@ -683,7 +746,7 @@ function Set-PowerPreset {
             Set-MonitorTimeout -Minutes 0
             Set-DiskTimeout -Minutes 0
             Set-HibernateTimeout -Minutes 0
-            Set-USBSelectiveSuspend -Disabled
+            Set-USBSelectiveSuspend -Disabled -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             Disable-Hibernate
             Write-Host "✓ Server preset applied" -ForegroundColor Green
         }
@@ -971,8 +1034,12 @@ function Show-PowerSettings {
     
     $usb = Get-USBSelectiveSuspend
     Write-Host "`nUSB Selective Suspend:" -ForegroundColor White
-    Write-Host "  AC Power:      $(if($usb.ACPower_Enabled){'Enabled'}else{'Disabled'})" -ForegroundColor Gray
-    Write-Host "  Battery Power: $(if($usb.BatteryPower_Enabled){'Enabled'}else{'Disabled'})" -ForegroundColor Gray
+    if ($usb.Supported) {
+        Write-Host "  AC Power:      $(if($usb.ACPower_Enabled){'Enabled'}else{'Disabled'})" -ForegroundColor Gray
+        Write-Host "  Battery Power: $(if($usb.BatteryPower_Enabled){'Enabled'}else{'Disabled'})" -ForegroundColor Gray
+    } else {
+        Write-Host "  Not available on this system" -ForegroundColor Yellow
+    }
     
     $hiberFile = Get-HibernateFileSize
     Write-Host "`nHibernate:" -ForegroundColor White
