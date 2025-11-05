@@ -894,30 +894,54 @@ function Get-BitlockerDataSavedToDiskSummary {
         
     .DESCRIPTION
         Returns a summary showing the newest key for each volume.
-        This is what Ninja should call to collect current keys.
+        By default shows all fields, but you can specify which fields to include.
         
-        IMPORTANT: This shows ALL volumes in registry, including disconnected drives.
+    .PARAMETER Fields
+        Array of field names to include. Valid options:
+        - VolumeID
+        - Date
+        - VolumeLetter
+        - VolumeType
+        - DriveType
+        - Status
+        - Encrypted
+        - Method
+        - Protection
+        - Key
+        
+        If not specified, all fields are included.
         
     .OUTPUTS
         String - Formatted key data (one line per volume, joined with newlines)
         
     .EXAMPLE
         Get-BitlockerDataSavedToDiskSummary
-        Returns summary of all volumes and their most recent keys
+        Returns all fields for each volume
         
     .EXAMPLE
-        Get-BitlockerDataSavedToDiskSummary | Out-File C:\keys.txt
-        Exports key summary to file
+        Get-BitlockerDataSavedToDiskSummary -Fields 'VolumeLetter', 'Key'
+        Returns only volume letter and key
         
     .EXAMPLE
-        $keys = Get-BitlockerDataSavedToDiskSummary
-        Ninja-Property-Set bitlockerKeys $keys
+        Get-BitlockerDataSavedToDiskSummary -Fields 'VolumeID', 'Date', 'Key'
+        Returns volume ID, date, and key
     #>
     [CmdletBinding()]
     [OutputType([string])]
-    param()
+    param(
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('VolumeID', 'Date', 'VolumeLetter', 'VolumeType', 'DriveType', 
+                     'Status', 'Encrypted', 'Method', 'Protection', 'Key')]
+        [string[]]$Fields
+    )
     
     try {
+        # If no fields specified, use all fields
+        if (!$Fields) {
+            $Fields = @('VolumeID', 'Date', 'VolumeLetter', 'VolumeType', 'DriveType', 
+                       'Status', 'Encrypted', 'Method', 'Protection', 'Key')
+        }
+        
         # Load all data from registry
         $allData = Get-AllExistingRegistryData
         
@@ -938,22 +962,46 @@ function Get-BitlockerDataSavedToDiskSummary {
             $sortedEntries = $entries | Sort-Object { [datetime]$_.Date } -Descending
             $mostRecent = $sortedEntries[0]
             
-            # Format date as mm/dd/yy
-            $formattedDate = ([datetime]$mostRecent.Date).ToString('MM/dd/yy')
+            # Build output based on requested fields
+            $outputParts = @()
             
-            # Format output
-            $output = "VolumeID: $volumeID | " +
-                      "Date: $formattedDate | " +
-                      "VolumeLetter: $($mostRecent.MountPoint) | " +
-                      "VolumeType: $($mostRecent.VolumeType) | " +
-                      "DriveType: $($mostRecent.DriveType) | " +
-                      "Status: $($mostRecent.VolumeStatus) | " +
-                      "Encrypted: $($mostRecent.EncryptionPercent)% | " +
-                      "Method: $($mostRecent.EncryptionMethod) | " +
-                      "Protection: $($mostRecent.ProtectionStatus) | " +
-                      "Key: $($mostRecent.RecoveryPassword)"
+            foreach ($field in $Fields) {
+                switch ($field) {
+                    'VolumeID' {
+                        $outputParts += "VolumeID: $volumeID"
+                    }
+                    'Date' {
+                        $formattedDate = ([datetime]$mostRecent.Date).ToString('MM/dd/yy')
+                        $outputParts += "Date: $formattedDate"
+                    }
+                    'VolumeLetter' {
+                        $outputParts += "VolumeLetter: $($mostRecent.MountPoint)"
+                    }
+                    'VolumeType' {
+                        $outputParts += "VolumeType: $($mostRecent.VolumeType)"
+                    }
+                    'DriveType' {
+                        $outputParts += "DriveType: $($mostRecent.DriveType)"
+                    }
+                    'Status' {
+                        $outputParts += "Status: $($mostRecent.VolumeStatus)"
+                    }
+                    'Encrypted' {
+                        $outputParts += "Encrypted: $($mostRecent.EncryptionPercent)%"
+                    }
+                    'Method' {
+                        $outputParts += "Method: $($mostRecent.EncryptionMethod)"
+                    }
+                    'Protection' {
+                        $outputParts += "Protection: $($mostRecent.ProtectionStatus)"
+                    }
+                    'Key' {
+                        $outputParts += "Key: $($mostRecent.RecoveryPassword)"
+                    }
+                }
+            }
             
-            $summary += $output
+            $summary += $outputParts -join " | "
         }
         
         # Return as single string (joined with newlines)
