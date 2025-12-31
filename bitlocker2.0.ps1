@@ -315,24 +315,74 @@ function Set-BitLockerBestPractice {
         [ValidateSet('SystemDriveOnly', 'InternalOnly', 'InternalAndExternal')]
         [string]$Scope = $script:DefaultScope,
         
-        [bool]$ConfigureTPM = $true
+        [bool]$ConfigureTPM = $true,
+        
+        [string]$LogPath = "$env:ProgramData\BitLockerBestPractice\Logs"
     )
     
     # Initialize output log - this gets returned and captured by RMM
     $log = [System.Collections.ArrayList]::new()
     
-    # Helper to add log entries
+    # -------------------------------------------------------------------------
+    # SETUP DISK LOGGING
+    # -------------------------------------------------------------------------
+    # Create log directory if it doesn't exist
+    if (-not (Test-Path $LogPath)) {
+        New-Item -Path $LogPath -ItemType Directory -Force | Out-Null
+    }
+    
+    # Create timestamped log file
+    $logFileName = "BitLocker_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').log"
+    $logFilePath = Join-Path $LogPath $logFileName
+    
+    # Also create/update a "latest" symlink-style file for easy access
+    $latestLogPath = Join-Path $LogPath "BitLocker_Latest.log"
+    
+    # Helper to add log entries - writes to both memory (for RMM) and disk (for backup)
     $addLog = {
         param([string]$Message)
-        [void]$log.Add("$(Get-Date -Format 'HH:mm:ss') | $Message")
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        $logLine = "$timestamp | $Message"
+        
+        # Add to in-memory log (returned to RMM)
+        [void]$log.Add($logLine)
+        
+        # Write to disk immediately (survives crashes/reboots)
+        try {
+            Add-Content -Path $logFilePath -Value $logLine -ErrorAction SilentlyContinue
+        }
+        catch {
+            # Silently fail disk logging - don't break the script
+        }
+        
         Write-Verbose $Message
     }
+    
+    # Start the log file with header
+    $header = @"
+================================================================================
+BITLOCKER BEST PRACTICE LOG
+================================================================================
+Log File: $logFilePath
+Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+Computer: $env:COMPUTERNAME
+User: $env:USERNAME
+================================================================================
+
+"@
+    try {
+        Set-Content -Path $logFilePath -Value $header -ErrorAction SilentlyContinue
+        # Update "latest" pointer
+        Copy-Item -Path $logFilePath -Destination $latestLogPath -Force -ErrorAction SilentlyContinue
+    }
+    catch { }
     
     & $addLog "=========================================="
     & $addLog "BitLocker Best Practice Enforcement"
     & $addLog "=========================================="
     & $addLog "Encryption Method: $EncryptionMethod"
     & $addLog "Scope: $Scope"
+    & $addLog "Log File: $logFilePath"
     & $addLog "=========================================="
     
     # -------------------------------------------------------------------------
@@ -443,9 +493,21 @@ function Set-BitLockerBestPractice {
                     & $addLog "COMPLIANT: Already encrypted with $EncryptionMethod"
                     
                     # Ensure auto-unlock is enabled for non-system drives
+                    # (only possible if system drive is fully encrypted)
                     if (-not $isSystemDrive) {
-                        $autoUnlock = Enable-AutoUnlockSafe -MountPoint $mountPoint
-                        & $addLog "Auto-unlock: $autoUnlock"
+                        $sysDriveVol = Get-BitLockerVolume -MountPoint $sysDrive -ErrorAction SilentlyContinue
+                        if ([string]$sysDriveVol.VolumeStatus -eq 'FullyEncrypted') {
+                            if (-not (Test-AutoUnlockEnabled -MountPoint $mountPoint)) {
+                                $autoUnlock = Enable-AutoUnlockSafe -MountPoint $mountPoint
+                                & $addLog "Auto-unlock (was missing): $autoUnlock"
+                            }
+                            else {
+                                & $addLog "Auto-unlock: Already enabled"
+                            }
+                        }
+                        else {
+                            & $addLog "Auto-unlock: Deferred (system drive at $($sysDriveVol.EncryptionPercentage)%)"
+                        }
                     }
                 }
                 else {
@@ -468,16 +530,29 @@ function Set-BitLockerBestPractice {
             }
             
             'FullyDecrypted' {
-                # Not encrypted - encrypt it
-                & $addLog "NOT ENCRYPTED: Starting encryption with $EncryptionMethod..."
+                # Not encrypted - but for secondary drives, we must wait until system drive is done
                 
-                # Check if we can enable auto-unlock (system drive must be encrypted first)
                 if (-not $isSystemDrive) {
+                    # Check if system drive is FULLY encrypted (not just encrypting)
                     $sysDriveStatus = Get-BitLockerVolume -MountPoint $sysDrive -ErrorAction SilentlyContinue
-                    if ($sysDriveStatus.VolumeStatus -ne 'FullyEncrypted') {
-                        & $addLog "WARNING: System drive not encrypted yet - auto-unlock may not work"
+                    $sysDriveState = [string]$sysDriveStatus.VolumeStatus
+                    
+                    if ($sysDriveState -ne 'FullyEncrypted') {
+                        # DO NOT encrypt secondary drives until system drive is done
+                        # This prevents the scenario where:
+                        # 1. Script encrypts C: and F: simultaneously
+                        # 2. Machine reboots before C: completes
+                        # 3. Script dies, F: is encrypted but auto-unlock was never enabled
+                        # 4. User gets prompted for F: recovery key on every boot forever
+                        & $addLog "DEFERRED: Cannot encrypt $mountPoint until system drive is FullyEncrypted"
+                        & $addLog "  System drive status: $sysDriveState ($($sysDriveStatus.EncryptionPercentage)%)"
+                        & $addLog "  Re-run this script after system drive encryption completes"
+                        continue  # Skip to next volume
                     }
                 }
+                
+                # If we get here, either it's the system drive OR system drive is FullyEncrypted
+                & $addLog "NOT ENCRYPTED: Starting encryption with $EncryptionMethod..."
                 
                 try {
                     # Enable BitLocker
@@ -493,7 +568,7 @@ function Set-BitLockerBestPractice {
                     Save-KeysToRegistry
                     & $addLog "Recovery key saved to registry"
                     
-                    # Enable auto-unlock for non-system drives
+                    # Enable auto-unlock for non-system drives (system drive is guaranteed FullyEncrypted here)
                     if (-not $isSystemDrive) {
                         $autoUnlock = Enable-AutoUnlockSafe -MountPoint $mountPoint
                         & $addLog "Auto-unlock: $autoUnlock"
@@ -549,6 +624,39 @@ function Set-BitLockerBestPractice {
     }
     
     # -------------------------------------------------------------------------
+    # STEP 4b: FINAL AUTO-UNLOCK CHECK
+    # -------------------------------------------------------------------------
+    # For any secondary drives that are FullyEncrypted but missing auto-unlock
+    # (handles legacy systems or edge cases)
+    
+    $sysDriveStatus = Get-BitLockerVolume -MountPoint $sysDrive -ErrorAction SilentlyContinue
+    
+    if ([string]$sysDriveStatus.VolumeStatus -eq 'FullyEncrypted') {
+        & $addLog ""
+        & $addLog "[STEP 4b] Checking auto-unlock on secondary drives..."
+        
+        foreach ($vol in $orderedVolumes) {
+            $mp = Format-MountPoint $vol.MountPoint
+            if ($mp -eq $sysDrive) { continue }  # Skip system drive
+            
+            $volStatus = Get-BitLockerVolume -MountPoint $mp -ErrorAction SilentlyContinue
+            if ([string]$volStatus.VolumeStatus -eq 'FullyEncrypted') {
+                if (-not (Test-AutoUnlockEnabled -MountPoint $mp)) {
+                    $autoUnlock = Enable-AutoUnlockSafe -MountPoint $mp
+                    & $addLog "  $mp auto-unlock (was missing): $autoUnlock"
+                }
+                else {
+                    & $addLog "  $mp auto-unlock: OK"
+                }
+            }
+        }
+    }
+    elseif ([string]$sysDriveStatus.VolumeStatus -eq 'EncryptionInProgress') {
+        & $addLog ""
+        & $addLog "[STEP 4b] System drive encrypting ($($sysDriveStatus.EncryptionPercentage)%) - secondary drives will be processed on next run"
+    }
+    
+    # -------------------------------------------------------------------------
     # STEP 5: FINAL KEY SAVE AND STATUS OUTPUT
     # -------------------------------------------------------------------------
     & $addLog ""
@@ -580,6 +688,30 @@ function Set-BitLockerBestPractice {
     & $addLog "=========================================="
     & $addLog "Enforcement complete"
     & $addLog "=========================================="
+    
+    # -------------------------------------------------------------------------
+    # FINALIZE DISK LOG
+    # -------------------------------------------------------------------------
+    try {
+        # Add footer
+        $footer = @"
+
+================================================================================
+Log completed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+================================================================================
+"@
+        Add-Content -Path $logFilePath -Value $footer -ErrorAction SilentlyContinue
+        
+        # Update "latest" pointer
+        Copy-Item -Path $logFilePath -Destination $latestLogPath -Force -ErrorAction SilentlyContinue
+        
+        # Cleanup old logs (keep last 30 days)
+        $cutoffDate = (Get-Date).AddDays(-30)
+        Get-ChildItem -Path $LogPath -Filter "BitLocker_*.log" -ErrorAction SilentlyContinue | 
+            Where-Object { $_.Name -ne "BitLocker_Latest.log" -and $_.LastWriteTime -lt $cutoffDate } |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+    catch { }
     
     # Return the log as a single string
     return ($log -join "`n")
@@ -637,18 +769,53 @@ function Get-BitLockerStatus {
     # Get BitLocker data for all volumes
     $blVolumes = Get-BitLockerVolume
     
+    if (-not $blVolumes) {
+        Write-Verbose "No BitLocker volumes found"
+        return $results
+    }
+    
     # Get internal/external classification
-    $internalDrives = @(Get-InternalVolumes | ForEach-Object { Format-MountPoint $_.DriveLetter })
-    $externalDrives = @(Get-ExternalVolumes | ForEach-Object { Format-MountPoint $_.DriveLetter })
+    # Build arrays of normalized drive letters for comparison
+    $internalDrives = [System.Collections.ArrayList]::new()
+    $externalDrives = [System.Collections.ArrayList]::new()
+    
+    # Get internal volumes
+    $intVols = Get-InternalVolumes
+    if ($intVols) {
+        foreach ($v in $intVols) {
+            if ($v.DriveLetter) {
+                [void]$internalDrives.Add((Format-MountPoint $v.DriveLetter))
+            }
+        }
+    }
+    Write-Verbose "Internal drives found: $($internalDrives -join ', ')"
+    
+    # Get external volumes
+    $extVols = Get-ExternalVolumes
+    if ($extVols) {
+        foreach ($v in $extVols) {
+            if ($v.DriveLetter) {
+                [void]$externalDrives.Add((Format-MountPoint $v.DriveLetter))
+            }
+        }
+    }
+    Write-Verbose "External drives found: $($externalDrives -join ', ')"
+    
     $sysDrive = Format-MountPoint $env:SystemDrive
     
     foreach ($blVol in $blVolumes) {
         $mountPoint = Format-MountPoint $blVol.MountPoint
         
-        # Determine drive type
+        # Determine drive type by checking if mount point is in our lists
         $driveType = 'Unknown'
-        if ($internalDrives -contains $mountPoint) { $driveType = 'Internal' }
-        elseif ($externalDrives -contains $mountPoint) { $driveType = 'External' }
+        if ($internalDrives -contains $mountPoint) { 
+            $driveType = 'Internal' 
+        }
+        elseif ($externalDrives -contains $mountPoint) { 
+            $driveType = 'External' 
+        }
+        
+        Write-Verbose "Volume $mountPoint classified as: $driveType"
         
         # Apply scope filter
         $include = switch ($Scope) {
@@ -658,7 +825,10 @@ function Get-BitLockerStatus {
             'All' { $true }
         }
         
-        if (-not $include) { continue }
+        if (-not $include) { 
+            Write-Verbose "Volume $mountPoint excluded by scope filter"
+            continue 
+        }
         
         # Get VolumeID from disk subsystem
         $volumeID = Get-VolumeID -MountPoint $mountPoint
@@ -670,7 +840,7 @@ function Get-BitLockerStatus {
         
         if (-not $recoveryPassword) { $recoveryPassword = 'None' }
         
-        # Build result object
+        # Build result object - CAST ENUMS TO STRINGS explicitly
         $results += [PSCustomObject]@{
             VolumeID             = $volumeID
             MountPoint           = $mountPoint
@@ -821,6 +991,9 @@ function Get-VolumeID {
         Drive letters can change (D: becomes E:, etc.) but VolumeID is permanent.
         We use VolumeID as the key for storing recovery passwords so we can
         always match a key to its volume even if letters change.
+        
+        Uses the disk/partition/volume pipeline to get UniqueId, which is more
+        reliable than Get-Volume alone.
     #>
     [CmdletBinding()]
     param(
@@ -830,17 +1003,36 @@ function Get-VolumeID {
     
     $letter = ($MountPoint -replace '[:\\]', '')
     
-    $volume = Get-Volume -DriveLetter $letter -ErrorAction SilentlyContinue
-    
-    if ($volume -and $volume.UniqueId) {
-        # Extract GUID from UniqueId (format varies, GUID is in braces)
-        $match = [regex]::Match($volume.UniqueId, '\{([^}]+)\}')
-        if ($match.Success) {
-            return $match.Groups[1].Value
+    # Method 1: Try via disk/partition pipeline (most reliable)
+    try {
+        $volume = Get-Partition -DriveLetter $letter -ErrorAction Stop | Get-Volume -ErrorAction Stop
+        if ($volume -and $volume.UniqueId) {
+            $match = [regex]::Match($volume.UniqueId, '\{([^}]+)\}')
+            if ($match.Success) {
+                return $match.Groups[1].Value
+            }
         }
+    }
+    catch {
+        Write-Verbose "Method 1 failed for $letter : $($_.Exception.Message)"
+    }
+    
+    # Method 2: Try Get-Volume directly
+    try {
+        $volume = Get-Volume -DriveLetter $letter -ErrorAction Stop
+        if ($volume -and $volume.UniqueId) {
+            $match = [regex]::Match($volume.UniqueId, '\{([^}]+)\}')
+            if ($match.Success) {
+                return $match.Groups[1].Value
+            }
+        }
+    }
+    catch {
+        Write-Verbose "Method 2 failed for $letter : $($_.Exception.Message)"
     }
     
     # Fallback: use drive letter (not ideal but better than nothing)
+    Write-Verbose "Could not get VolumeID for $letter - using fallback"
     return "Unknown-$letter"
 }
 
@@ -1103,14 +1295,17 @@ function Save-KeysToRegistry {
         2. Load existing registry data (includes disconnected drives)
         3. Merge: current data updates existing, disconnected drives preserved
         4. Save merged data back to registry
+        5. Write backup to disk log file
         
         This ensures:
         - Keys for connected drives are always current
         - Keys for disconnected drives are preserved
         - Multiple keys per volume are tracked if they change
+        - Disk backup exists even if registry is corrupted
         
     .NOTES
         Registry location: HKLM:\SOFTWARE\BitLockerHistory\{VolumeID}\Data
+        Disk backup: $env:ProgramData\BitLockerBestPractice\Keys\BitLocker_Keys.log
         Data format: JSON array of historical entries
     #>
     [CmdletBinding()]
@@ -1162,6 +1357,41 @@ function Save-KeysToRegistry {
         
         # Save to registry
         Save-DataToRegistry -Data $merged
+        
+        # =====================================================================
+        # DISK BACKUP - Critical safety net for recovery keys
+        # =====================================================================
+        try {
+            $keyBackupPath = "$env:ProgramData\BitLockerBestPractice\Keys"
+            if (-not (Test-Path $keyBackupPath)) {
+                New-Item -Path $keyBackupPath -ItemType Directory -Force | Out-Null
+            }
+            
+            $keyLogFile = Join-Path $keyBackupPath "BitLocker_Keys.log"
+            $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+            
+            # Append to key log (never overwrite - historical record)
+            $keyLogEntry = @"
+
+================================================================================
+KEY BACKUP: $timestamp
+Computer: $env:COMPUTERNAME
+================================================================================
+"@
+            Add-Content -Path $keyLogFile -Value $keyLogEntry -ErrorAction SilentlyContinue
+            
+            foreach ($volID in $merged.Keys) {
+                $entry = $merged[$volID] | Select-Object -First 1
+                if ($entry.RecoveryPassword -and $entry.RecoveryPassword -ne 'None') {
+                    $keyLine = "VolumeID: $volID | Mount: $($entry.MountPoint) | Key: $($entry.RecoveryPassword) | Status: $($entry.VolumeStatus)"
+                    Add-Content -Path $keyLogFile -Value $keyLine -ErrorAction SilentlyContinue
+                }
+            }
+        }
+        catch {
+            # Silently fail disk backup - don't break the main function
+            Write-Verbose "Disk backup failed: $($_.Exception.Message)"
+        }
         
         Write-Verbose "Saved keys for $($merged.Count) volume(s) to registry"
     }
@@ -1262,14 +1492,17 @@ function Save-DataToRegistry {
 
 
 # ============================================================================
-# EXPORTS
+# EXPORTS (for module use)
 # ============================================================================
-# If using this as a module, these are the public functions.
+# If loaded as a module (.psm1), export public functions.
+# When dot-sourced as a script, this section is skipped.
 
-Export-ModuleMember -Function @(
-    'Test-BitLockerEligibility',
-    'Test-BitLockerBestPractice', 
-    'Set-BitLockerBestPractice',
-    'Get-BitLockerStatus',
-    'Get-BitLockerSavedKeys'
-)
+if ($MyInvocation.MyCommand.ScriptBlock.Module) {
+    Export-ModuleMember -Function @(
+        'Test-BitLockerEligibility',
+        'Test-BitLockerBestPractice', 
+        'Set-BitLockerBestPractice',
+        'Get-BitLockerStatus',
+        'Get-BitLockerSavedKeys'
+    )
+}
