@@ -833,10 +833,11 @@ function Get-BitLockerStatus {
         # Get VolumeID from disk subsystem
         $volumeID = Get-VolumeID -MountPoint $mountPoint
         
-        # Get recovery password(s)
+        # Get recovery password - only take the FIRST one if multiple exist
+        # (Multiple can exist if drive was encrypted multiple times or protectors manually added)
         $recoveryPassword = $blVol.KeyProtector | 
             Where-Object { $_.KeyProtectorType -eq 'RecoveryPassword' } | 
-            Select-Object -ExpandProperty RecoveryPassword
+            Select-Object -First 1 -ExpandProperty RecoveryPassword
         
         if (-not $recoveryPassword) { $recoveryPassword = 'None' }
         
@@ -871,15 +872,26 @@ function Get-BitLockerSavedKeys {
         Use this to recover keys for drives that may be disconnected or to
         verify keys are being saved properly.
         
+    .PARAMETER Simple
+        If specified, outputs just "DriveLetter | Key" format for easy reading.
+        
     .OUTPUTS
         [string] - Formatted key information (one line per volume)
         
     .EXAMPLE
         Get-BitLockerSavedKeys
+        # Full output with VolumeID, status, date
+        
+    .EXAMPLE
+        Get-BitLockerSavedKeys -Simple
+        # C: | 123456-789012-345678-901234-567890-123456-789012-345678
+        # F: | 987654-321098-765432-109876-543210-987654-321098-765432
     #>
     [CmdletBinding()]
     [OutputType([string])]
-    param()
+    param(
+        [switch]$Simple
+    )
     
     $registryData = Get-KeysFromRegistry
     
@@ -900,7 +912,21 @@ function Get-BitLockerSavedKeys {
             $latest = $entry
         }
         
-        $output += "VolumeID: $volumeID | Mount: $($latest.MountPoint) | Key: $($latest.RecoveryPassword) | Status: $($latest.VolumeStatus) | Saved: $($latest.Date)"
+        if ($Simple) {
+            # Simple format: just drive letter and key (skip if no key)
+            $key = $latest.RecoveryPassword
+            if ($key -and $key -ne 'None' -and $key.Trim() -ne '') {
+                $output += "$($latest.MountPoint) | $key"
+            }
+        }
+        else {
+            # Full format with all details
+            $output += "VolumeID: $volumeID | Mount: $($latest.MountPoint) | Key: $($latest.RecoveryPassword) | Status: $($latest.VolumeStatus) | Saved: $($latest.Date)"
+        }
+    }
+    
+    if ($output.Count -eq 0) {
+        return "No recovery keys found (volumes may be decrypted)"
     }
     
     return ($output -join "`n")
