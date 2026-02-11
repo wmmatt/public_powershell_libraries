@@ -58,7 +58,7 @@
        G3. Run during encryption in progress - waits/continues properly
     
 .PARAMETER ScriptPath
-    Path to BitLockerBestPractice.ps1
+    Path to bitlocker-2.0.ps1
     
 .PARAMETER MaxWaitMinutes
     Maximum time to wait for encryption/decryption operations
@@ -97,7 +97,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$ScriptPath = (Join-Path $PSScriptRoot "BitLockerBestPractice.ps1"),
+    [string]$ScriptPath = (Join-Path $PSScriptRoot "bitlocker-2.0.ps1"),
     [int]$MaxWaitMinutes = 120,
     
     [ValidateSet('All', 'KeyPreservation', 'StateTransitions', 'AutoUnlock', 'MultiVolume', 'Registry', 'ErrorHandling', 'Idempotency')]
@@ -496,7 +496,7 @@ Write-Log "Include Reboot Tests: $IncludeRebootTests"
 Write-Log "Skip External Drives: $SkipExternalDrives"
 
 if (-not (Test-Path $ScriptPath)) {
-    Write-Log "Cannot find BitLockerBestPractice.ps1 at: $ScriptPath" -Level ERROR
+    Write-Log "Cannot find bitlocker-2.0.ps1 at: $ScriptPath" -Level ERROR
     exit 1
 }
 
@@ -635,73 +635,98 @@ if ($runKeyTests) {
     if ($IncludeDestructive) {
         Write-Log "A2: Key preserved when encryption is paused" -Level SUBSECTION
         
-        # Need a decrypted volume - if none available, decrypt one
-        # Only look at internal volumes if SkipExternalDrives is set
-        $candidateVolumes = Get-BitLockerVolume | Where-Object { [string]$_.VolumeStatus -eq 'FullyDecrypted' }
-        if ($SkipExternalDrives) {
-            $candidateVolumes = $candidateVolumes | Where-Object { $_.MountPoint -in $internalVolumes }
-        }
-        $testVol = $candidateVolumes | Select-Object -First 1
+        # For pause tests, we need a volume large enough to not complete instantly
+        # Try volumes from largest to smallest until we can successfully pause one
+        $pauseTestCompleted = $false
+        $volumesToTry = @()
         
-        if (-not $testVol -and $secondaryInternal.Count -gt 0) {
-            # Decrypt a secondary internal drive for this test
-            $volToDecrypt = Get-SmallestSecondaryInternal -SecondaryDrives $secondaryInternal
-            Write-Log "No decrypted volume available - decrypting $volToDecrypt for test (smallest internal)..."
-            Invoke-SafeDecrypt -MountPoint $volToDecrypt | Out-Null
-            Wait-ForEncryptionComplete -TargetVolume $volToDecrypt | Out-Null
-            $testVol = Get-BitLockerVolume -MountPoint $volToDecrypt
+        # Build list of volumes to try, largest first
+        if ($secondaryInternal.Count -gt 0) {
+            $volumesToTry = Get-Volume | 
+                Where-Object { "$($_.DriveLetter):" -in $secondaryInternal } |
+                Sort-Object Size -Descending |
+                ForEach-Object { "$($_.DriveLetter):" }
         }
         
-        if ($testVol -and [string]$testVol.VolumeStatus -eq 'FullyDecrypted') {
-            $mp = $testVol.MountPoint
+        foreach ($volToTest in $volumesToTry) {
+            if ($pauseTestCompleted) { break }
             
-            # Start encryption
-            Write-Log "Starting encryption on $mp..."
-            Invoke-SafeEncrypt -MountPoint $mp | Out-Null
-            Get-KeySnapshot -Label "A2-Started"
+            # Get current state
+            $testVol = Get-BitLockerVolume -MountPoint $volToTest -ErrorAction SilentlyContinue
             
-            # Wait a few seconds then pause
-            Start-Sleep -Seconds 10
-            
-            $status = Get-BitLockerVolume -MountPoint $mp
-            if ([string]$status.VolumeStatus -eq 'EncryptionInProgress') {
-                Write-Log "Pausing encryption at $($status.EncryptionPercentage)%..."
-                Invoke-PauseEncryption -MountPoint $mp | Out-Null
-                
-                Start-Sleep -Seconds 3
-                Get-KeySnapshot -Label "A2-Paused"
-                
-                # Verify key is still there
-                $comparison = Compare-KeySnapshots -Before "A2-Started" -After "A2-Paused"
-                $keyPreserved = $comparison.KeysRemoved.Count -eq 0
-                
-                Add-TestResult -Category "KeyPreservation" -TestID "A2" `
-                    -TestName "Key preserved when encryption paused" `
-                    -Passed $keyPreserved `
-                    -Details "KeysRemoved: $($comparison.KeysRemoved.Count)" `
-                    -Impact "Critical - Pausing encryption should never lose keys"
-                
-                # Resume for cleanup
-                Write-Log "Resuming encryption..."
-                Invoke-ResumeEncryption -MountPoint $mp | Out-Null
-                Wait-ForEncryptionComplete -TargetVolume $mp | Out-Null
+            # If not decrypted, try to decrypt it first
+            if ([string]$testVol.VolumeStatus -ne 'FullyDecrypted') {
+                Write-Log "Decrypting $volToTest for pause test..."
+                Invoke-SafeDecrypt -MountPoint $volToTest | Out-Null
+                Wait-ForEncryptionComplete -TargetVolume $volToTest | Out-Null
+                $testVol = Get-BitLockerVolume -MountPoint $volToTest
             }
-            else {
-                Write-Log "Encryption completed too fast to pause - skipping" -Level WARN
-                Add-TestResult -Category "KeyPreservation" -TestID "A2" `
-                    -TestName "Key preserved when encryption paused" `
-                    -Passed $true `
-                    -Details "SKIPPED - Encryption too fast to pause" `
-                    -Impact "Critical"
+            
+            if ([string]$testVol.VolumeStatus -eq 'FullyDecrypted') {
+                $mp = $testVol.MountPoint
+                $volSize = (Get-Volume -DriveLetter ($mp -replace '[:\\]', '')).Size / 1GB
+                Write-Log "Trying pause test on $mp ($('{0:N1}' -f $volSize) GB)..."
+                
+                # Start encryption
+                Invoke-SafeEncrypt -MountPoint $mp | Out-Null
+                Get-KeySnapshot -Label "A2-Started"
+                
+                # Wait a few seconds then try to pause
+                Start-Sleep -Seconds 5
+                
+                $status = Get-BitLockerVolume -MountPoint $mp
+                if ([string]$status.VolumeStatus -eq 'EncryptionInProgress') {
+                    Write-Log "Pausing encryption at $($status.EncryptionPercentage)%..."
+                    Invoke-PauseEncryption -MountPoint $mp | Out-Null
+                    
+                    Start-Sleep -Seconds 3
+                    
+                    # Verify it actually paused
+                    $pausedStatus = Get-BitLockerVolume -MountPoint $mp
+                    if ([string]$pausedStatus.VolumeStatus -eq 'EncryptionPaused') {
+                        Write-Log "Successfully paused at $($pausedStatus.EncryptionPercentage)%"
+                        Get-KeySnapshot -Label "A2-Paused"
+                        
+                        # Verify key is still there
+                        $comparison = Compare-KeySnapshots -Before "A2-Started" -After "A2-Paused"
+                        $keyPreserved = $comparison.KeysRemoved.Count -eq 0
+                        
+                        Add-TestResult -Category "KeyPreservation" -TestID "A2" `
+                            -TestName "Key preserved when encryption paused" `
+                            -Passed $keyPreserved `
+                            -Details "Volume: $mp ($('{0:N1}' -f $volSize) GB), KeysRemoved: $($comparison.KeysRemoved.Count)" `
+                            -Impact "Critical - Pausing encryption should never lose keys"
+                        
+                        # Resume for cleanup and A3 test
+                        Write-Log "Resuming encryption..."
+                        Invoke-ResumeEncryption -MountPoint $mp | Out-Null
+                        
+                        $pauseTestCompleted = $true
+                    }
+                    else {
+                        Write-Log "Pause command sent but status is $([string]$pausedStatus.VolumeStatus) - encryption may have completed" -Level WARN
+                        # Let it complete and try next volume
+                        Wait-ForEncryptionComplete -TargetVolume $mp | Out-Null
+                    }
+                }
+                else {
+                    Write-Log "Encryption on $mp completed too fast ($($status.EncryptionPercentage)%) - trying next volume..." -Level WARN
+                    # Volume encrypted too fast, try next one
+                }
             }
         }
-        else {
+        
+        if (-not $pauseTestCompleted) {
+            Write-Log "All volumes encrypted too fast to test pause functionality" -Level WARN
             Add-TestResult -Category "KeyPreservation" -TestID "A2" `
                 -TestName "Key preserved when encryption paused" `
                 -Passed $true `
-                -Details "SKIPPED - No secondary internal volume available" `
+                -Details "SKIPPED - All secondary volumes encrypted too fast to pause (largest tried: $($volumesToTry[0]))" `
                 -Impact "Critical"
         }
+        
+        # Wait for any in-progress encryption to complete before A3
+        Wait-ForEncryptionComplete | Out-Null
     }
     
     # -------------------------------------------------------------------------
@@ -714,22 +739,40 @@ if ($runKeyTests) {
         if ($script:KeySnapshots.ContainsKey("A2-Started") -and $script:KeySnapshots.ContainsKey("A2-Paused")) {
             Get-KeySnapshot -Label "A3-AfterResume"
             
-            $keyBefore = $script:KeySnapshots["A2-Started"].RegistryKeys.Values | Select-Object -First 1
-            $keyAfter = $script:KeySnapshots["A3-AfterResume"].RegistryKeys.Values | Select-Object -First 1
+            # Find the volume that was tested in A2
+            $a2StartedKeys = $script:KeySnapshots["A2-Started"].RegistryKeys
+            $a3AfterKeys = $script:KeySnapshots["A3-AfterResume"].RegistryKeys
             
-            $sameKey = ($keyBefore -eq $keyAfter)
+            # Compare keys for volumes that existed in A2
+            $keysMatch = $true
+            $keyDetails = @()
+            
+            foreach ($volId in $a2StartedKeys.Keys) {
+                $keyBefore = $a2StartedKeys[$volId]
+                $keyAfter = $a3AfterKeys[$volId]
+                
+                if ($keyBefore -and $keyAfter) {
+                    if ($keyBefore -eq $keyAfter) {
+                        $keyDetails += "$volId : unchanged"
+                    }
+                    else {
+                        $keyDetails += "$volId : CHANGED"
+                        $keysMatch = $false
+                    }
+                }
+            }
             
             Add-TestResult -Category "KeyPreservation" -TestID "A3" `
                 -TestName "Same key after resume (not regenerated)" `
-                -Passed $sameKey `
-                -Details "Before: $keyBefore, After: $keyAfter" `
+                -Passed $keysMatch `
+                -Details ($keyDetails -join ", ") `
                 -Impact "Medium - New key isn't bad, but unexpected"
         }
         else {
             Add-TestResult -Category "KeyPreservation" -TestID "A3" `
                 -TestName "Same key after resume (not regenerated)" `
                 -Passed $true `
-                -Details "SKIPPED - A2 test didn't run (encryption too fast to pause)" `
+                -Details "SKIPPED - A2 pause test didn't complete (all volumes too fast)" `
                 -Impact "Medium"
         }
     }
@@ -1463,12 +1506,18 @@ if ($runIdempotencyTests) {
     # -------------------------------------------------------------------------
     Write-Log "G2: Set on compliant system is no-op" -Level SUBSECTION
     
-    # First ensure we're compliant
+    # First, MAKE the system compliant
+    Write-Log "Ensuring system is compliant first..."
+    Set-BitLockerBestPractice -Scope SystemDriveOnly | Out-Null
+    Wait-ForEncryptionComplete -TargetVolume $sysDrive | Out-Null
+    
+    # Verify we're now compliant
     $isCompliant = Test-BitLockerBestPractice -Scope SystemDriveOnly
     
     if ($isCompliant) {
         Get-KeySnapshot -Label "G2-Before"
         
+        Write-Log "System compliant - running Set-BitLockerBestPractice again..."
         $output = Set-BitLockerBestPractice -Scope SystemDriveOnly
         
         Get-KeySnapshot -Label "G2-After"
@@ -1478,23 +1527,20 @@ if ($runIdempotencyTests) {
                      $comparison.KeysRemoved.Count -eq 0 -and 
                      $comparison.KeysChanged.Count -eq 0
         
-        # Output should indicate "already compliant" or "in alignment"
-        $outputIndicatesNoAction = $output -match 'alignment|compliant|already'
-        
         Add-TestResult -Category "Idempotency" -TestID "G2" `
             -TestName "Set on compliant system makes no changes" `
-            -Passed ($noChanges) `
+            -Passed $noChanges `
             -Details "Keys changed: $(-not $noChanges)" `
             -Impact "Low - Re-running should be safe"
     }
     else {
+        # This shouldn't happen - we just ran Set-BitLockerBestPractice
         Add-TestResult -Category "Idempotency" -TestID "G2" `
             -TestName "Set on compliant system makes no changes" `
             -Passed $false `
-            -Details "SKIPPED - System not compliant" `
-            -Impact "Low"
+            -Details "FAILED - Could not achieve compliance even after running Set-BitLockerBestPractice" `
+            -Impact "High - Something is broken"
     }
-}
 
 
 # ============================================================================

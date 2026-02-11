@@ -391,13 +391,41 @@ User: $env:USERNAME
     & $addLog ""
     & $addLog "[STEP 1] Saving existing keys to registry..."
     
+    $keySaveVerified = $false
     try {
         Save-KeysToRegistry
+        $keySaveVerified = $true
         & $addLog "SUCCESS: Existing keys saved to registry"
     }
     catch {
-        & $addLog "WARNING: Could not save existing keys: $($_.Exception.Message)"
-        # Continue anyway - don't block encryption
+        & $addLog "WARNING: First save attempt failed: $($_.Exception.Message)"
+        & $addLog "Retrying in 2 seconds..."
+
+        try {
+            Start-Sleep -Seconds 2
+            Save-KeysToRegistry
+            $keySaveVerified = $true
+            & $addLog "SUCCESS: Existing keys saved to registry (retry)"
+        }
+        catch {
+            & $addLog "CRITICAL: Could not save keys after 2 attempts: $($_.Exception.Message)"
+            & $addLog "ABORTING: Will not modify encryption state without verified key storage"
+        }
+    }
+
+    if (-not $keySaveVerified) {
+        # Dump current status for RMM visibility before bailing
+        try {
+            $status = Get-BitLockerStatus
+            foreach ($vol in $status) {
+                & $addLog "  Volume: $($vol.MountPoint) | Status: $($vol.VolumeStatus) | Key: $($vol.RecoveryPassword)"
+            }
+        }
+        catch {
+            & $addLog "Could not retrieve status: $($_.Exception.Message)"
+        }
+
+        return ($log -join "`n")
     }
     
     # -------------------------------------------------------------------------
